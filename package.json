@@ -1,0 +1,15 @@
+{
+  "name": "passage-key",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "A pixel-art 3D typing roguelite: adventure with bosses, versus AI, and online multiplayer.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}
