@@ -63,16 +63,20 @@ trigger that auto-creates a profile on signup.
 cp .env.example .env
 ```
 
-Fill in from Dashboard → **Settings → API**:
+Fill in from Dashboard → **Settings → API Keys**:
 
 ```
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJ...
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxxxxxxxxxxx
 ```
 
-> **Only ever use the `anon` / publishable key here.** The `service_role` key and
-> your database password bypass Row Level Security entirely and must never appear
-> in frontend code, `.env` files that get committed, or anywhere client-side.
+> Supabase renamed its API keys: **`sb_publishable_...` is the modern replacement
+> for the legacy `anon` JWT** — they serve the same purpose. The app accepts
+> either name (`VITE_SUPABASE_PUBLISHABLE_KEY` or `VITE_SUPABASE_ANON_KEY`).
+
+> ⚠️ **Never expose the secret key** (`sb_secret_...` / `service_role`) or your
+> database password. Both bypass Row Level Security and grant full database
+> access — they must never appear in frontend code or a committed file.
 > `.env` is gitignored.
 
 ## Deploying to Vercel

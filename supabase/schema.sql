@@ -38,9 +38,14 @@ create policy "users update own profile"
 
 -- ------------------------------------------------------------------ scores
 
+-- NOTE: user_id references public.profiles(id) rather than auth.users(id).
+-- profiles.id is itself an FK to auth.users(id), so integrity is identical —
+-- but PostgREST can only join along foreign keys it can see, and it cannot
+-- traverse into the auth schema. Pointing at profiles is what makes the
+-- `scores -> profiles(username)` leaderboard join resolve.
 create table if not exists public.scores (
   id         bigint generated always as identity primary key,
-  user_id    uuid not null references auth.users(id) on delete cascade,
+  user_id    uuid not null references public.profiles(id) on delete cascade,
   mode       text not null,
   score      integer not null check (score >= 0),
   level      integer not null check (level >= 1),

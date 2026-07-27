@@ -8,7 +8,12 @@
 import { createClient } from '@supabase/supabase-js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// Supabase renamed these: `sb_publishable_...` is the modern replacement for the
+// legacy `anon` JWT. Accept either name so existing setups keep working.
+const anonKey =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // The game is fully playable offline; online features simply stay disabled
 // until credentials are provided, rather than crashing the app.
@@ -111,19 +116,32 @@ export async function submitScore(entry) {
   return data;
 }
 
+const SCORE_COLUMNS = 'score, level, wpm, accuracy, best_combo, bosses, mode, created_at';
+
 export async function fetchGlobalLeaderboard({ mode = null, limit = 25 } = {}) {
   if (!supabase) return [];
-  let query = supabase
-    .from('scores')
-    .select('score, level, wpm, accuracy, best_combo, bosses, mode, created_at, profiles(username)')
-    .order('score', { ascending: false })
-    .limit(limit);
-  if (mode) query = query.eq('mode', mode);
 
-  const { data, error } = await query;
-  if (error) {
-    console.warn('[Passage Key] leaderboard fetch failed:', error.message);
+  const run = (columns) => {
+    let q = supabase
+      .from('scores')
+      .select(columns)
+      .order('score', { ascending: false })
+      .limit(limit);
+    if (mode) q = q.eq('mode', mode);
+    return q;
+  };
+
+  // Preferred: join the player's username in a single round trip.
+  const withNames = await run(`${SCORE_COLUMNS}, profiles(username)`);
+  if (!withNames.error) return withNames.data;
+
+  // The join needs the scores -> profiles foreign key (see migration 001).
+  // If it's missing, still show the board rather than nothing.
+  console.warn('[Passage Key] leaderboard join unavailable, falling back:', withNames.error.message);
+  const plain = await run(SCORE_COLUMNS);
+  if (plain.error) {
+    console.warn('[Passage Key] leaderboard fetch failed:', plain.error.message);
     return [];
   }
-  return data;
+  return plain.data.map(row => ({ ...row, profiles: null }));
 }
