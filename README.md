@@ -7,19 +7,35 @@ pick skills, and fight bosses — with versus-AI and online multiplayer in progr
 
 ## Features
 
-**Playable now**
+**Single player**
 - **Adventure** — endless run where a boss guards every 5th level
 - **Classic** — pure endless survival
 - Three animated boss species with HP bars, phrase volleys, and enrage phases
 - Procedural content: words, sentences, and code snippets that effectively never repeat
 - Skill system — 5 active skills (3 slots) + 6 stacking passives, chosen on level-up
 - Mana ultimate that clears the screen, elemental VFX, monster voice synthesis
-- Fully offline; no account required
 
-**In progress**
-- Versus AI — Royal Rumble & Tower, four bot difficulties
-- Online multiplayer — Royal Rumble (6p) and Tower 4v4
-- Accounts, profiles, and global leaderboards
+**Versus AI** — four bot tiers (Rookie 22 WPM → Typist 98 WPM)
+- **Royal Rumble** — up to 6 fighters. Combos launch word volleys at a random
+  rival; unanswered pressure drains their health. Last one standing wins.
+- **Tower 4v4** — teams share one word pool. Each cleared word deals 5 damage
+  to the enemy tower (50 HP). Words claimed by another player are locked and
+  dimmed. Best of 3 rounds, each opening with a skill draft. No ultimate.
+
+**Online multiplayer** — same two formats over Supabase Realtime
+- Create or join a room with a 5-character code
+- Live presence roster; host starts the match
+
+**Accounts** — email sign-up, profiles, and score submission
+
+## Attack economy
+
+| Combo | Words sent |
+|---|---|
+| 5 | 1 |
+| 10 | 2 |
+| 15 | 3 |
+| 20+ | 4 |
 
 ## Controls
 
@@ -109,10 +125,21 @@ src/
   game.js      core loop, state, progression, HUD
   sprites.js   canvas setup, 3D background, monsters, hero
   boss.js      boss definitions, phases, sprites
+  versus.js    AI opponents, attack economy, Rumble + Tower rules
+  online.js    Supabase Realtime rooms, presence, match events
   wordgen.js   procedural word/sentence/code generation
   audio.js     synthesis, SFX, monster voices, adaptive music
   supabase.js  auth, profiles, leaderboards
   style.css    UI theme
 supabase/
   schema.sql   tables, RLS policies, triggers
+  migrations/  incremental schema changes
 ```
+
+## Multiplayer design note
+
+Online play is peer-broadcast, not server-authoritative: each client simulates
+only its own board, and just "I sent you N words" plus status crosses the wire.
+That keeps it free (no game server) and latency-tolerant. The trade-off is that
+a modified client could misreport its combo — fine for casual play. Hardening
+would mean moving match state into an authoritative server or Edge Function.

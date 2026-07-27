@@ -595,6 +595,268 @@ html, body {
 .mode-card-name { font-size: 12px; color: var(--px-gold); letter-spacing: 1px; }
 .mode-card-desc { font-size: 8px; line-height: 1.7; color: #c7c2ff; }
 
+/* ---------- versus: opponent rail ---------- */
+
+#opponent-rail {
+  position: absolute;
+  right: 16px;
+  top: 68px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 168px;
+}
+
+.opp-card {
+  padding: 7px 9px;
+  background: linear-gradient(180deg, var(--px-panel-2), var(--px-panel));
+  border: 2px solid var(--px-ink);
+  box-shadow: 0 3px 0 var(--px-ink), 0 6px 10px rgba(0,0,0,0.45);
+  transition: transform 0.1s ease, opacity 0.3s ease;
+}
+
+.opp-card.dead { opacity: 0.35; filter: grayscale(1); }
+.opp-card.hit { animation: oppHit 320ms ease-out; }
+.opp-card.clear { animation: oppClear 320ms ease-out; }
+
+@keyframes oppHit {
+  0% { transform: translateX(0); }
+  40% { transform: translateX(-6px); box-shadow: 0 0 0 2px var(--px-red), 0 3px 0 var(--px-ink); }
+  100% { transform: translateX(0); }
+}
+
+@keyframes oppClear {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.05); box-shadow: 0 0 0 2px var(--px-green), 0 3px 0 var(--px-ink); }
+  100% { transform: scale(1); }
+}
+
+.opp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 8px;
+  margin-bottom: 5px;
+}
+
+.opp-name { color: #eafcff; letter-spacing: 1px; }
+.opp-name.is-you { color: var(--px-gold); }
+.opp-combo { color: var(--px-magenta); }
+
+.opp-bar-outer {
+  height: 8px;
+  background: #0a0320;
+  border: 1px solid var(--px-border-light);
+  overflow: hidden;
+}
+
+.opp-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff2d4a, #ff8a9a);
+  transition: width 220ms ease-out;
+}
+
+.opp-bar-fill.team-a { background: linear-gradient(90deg, #00a8c9, #7fe8ff); }
+.opp-bar-fill.team-b { background: linear-gradient(90deg, #c9007a, #ff8ad0); }
+
+.opp-pressure {
+  margin-top: 4px;
+  font-size: 7px;
+  color: var(--px-red);
+  letter-spacing: 1px;
+}
+
+/* ---------- versus: tower HUD ---------- */
+
+#tower-hud {
+  position: absolute;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 14px;
+  background: linear-gradient(180deg, var(--px-panel-2), var(--px-panel));
+  border: 3px solid var(--px-ink);
+  box-shadow: 0 5px 0 var(--px-ink), 0 10px 18px rgba(0,0,0,0.55);
+}
+
+.tower-side { display: flex; flex-direction: column; gap: 5px; }
+.tower-tag { font-size: 8px; letter-spacing: 1px; }
+.team-a { color: #7fe8ff; }
+.team-b { color: #ff8ad0; }
+
+.tower-bar-outer {
+  position: relative;
+  width: 168px;
+  height: 16px;
+  background: #0a0320;
+  border: 2px solid var(--px-border-light);
+  overflow: hidden;
+}
+
+.tower-bar-fill { height: 100%; width: 100%; transition: width 250ms ease-out; }
+.team-a-fill { background: linear-gradient(180deg, #7fe8ff, #0080a0); box-shadow: 0 0 10px rgba(0,200,255,0.7); }
+.team-b-fill { background: linear-gradient(180deg, #ff8ad0, #a00060); box-shadow: 0 0 10px rgba(255,46,196,0.7); }
+
+.tower-bar-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: #fff;
+  text-shadow: 1px 1px 0 rgba(0,0,0,0.9);
+}
+
+.tower-round {
+  font-size: 10px;
+  color: var(--px-gold);
+  letter-spacing: 1px;
+  min-width: 74px;
+  text-align: center;
+}
+
+/* ---------- setup / pick chips ---------- */
+
+.setup-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-label {
+  font-size: 9px;
+  color: var(--px-cyan);
+  letter-spacing: 2px;
+}
+
+.setup-hint {
+  font-size: 8px;
+  color: #9a90c8;
+  letter-spacing: 1px;
+  min-height: 12px;
+}
+
+.chip-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+.pick-chip {
+  padding: 11px 15px;
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #c7c2ff;
+  background: linear-gradient(180deg, #241150, #170a35);
+  border: 2px solid var(--px-ink);
+  box-shadow: 0 4px 0 var(--px-ink);
+  cursor: pointer;
+  transition: transform 0.08s ease;
+}
+
+.pick-chip:hover { transform: translateY(-2px); }
+
+.pick-chip.selected {
+  color: #fff;
+  background: linear-gradient(180deg, #0f7180, #063038);
+  border-color: var(--px-cyan);
+  box-shadow: 0 0 12px rgba(0,246,255,0.5), 0 4px 0 var(--px-ink);
+}
+
+/* ---------- inputs ---------- */
+
+.pixel-input {
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-align: center;
+  text-transform: uppercase;
+  color: #eafcff;
+  background: #0a0320;
+  border: 3px solid var(--px-border-light);
+  outline: none;
+}
+
+.pixel-input::placeholder { color: #5a4f8a; }
+.pixel-input:focus { border-color: var(--px-cyan); box-shadow: 0 0 12px rgba(0,246,255,0.4); }
+.pixel-input.full { width: 100%; text-align: left; text-transform: none; letter-spacing: 1px; }
+
+.join-row { display: flex; gap: 8px; align-items: stretch; }
+.join-row .pixel-input { width: 140px; }
+.join-btn { min-width: 110px; }
+
+/* ---------- lobby ---------- */
+
+.room-code-display {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.room-code {
+  font-size: 22px;
+  letter-spacing: 6px;
+  color: var(--px-gold);
+  text-shadow: 2px 2px 0 #5c2f08, 0 0 16px rgba(255,216,61,0.6);
+}
+
+.lobby-list {
+  width: min(420px, 84vw);
+  max-height: 34vh;
+  overflow-y: auto;
+  list-style: none;
+  font-size: 10px;
+}
+
+.lobby-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 11px;
+  margin-bottom: 5px;
+  background: rgba(255,255,255,0.04);
+  border: 2px solid var(--px-border-light);
+}
+
+.lobby-list li.is-self { border-color: var(--px-gold); color: var(--px-gold); }
+.lobby-badge { font-size: 8px; color: var(--px-cyan); }
+
+/* ---------- auth ---------- */
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, 88vw);
+}
+
+.auth-error {
+  font-size: 8px;
+  line-height: 1.6;
+  color: var(--px-red);
+  min-height: 12px;
+}
+
+/* ---------- word claim (tower) ---------- */
+
+.claim-tag {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 8px;
+  padding: 2px 5px;
+  color: #04010c;
+  background: var(--px-gold);
+  border: 1px solid var(--px-ink);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 /* ---------- screens ---------- */
 
 .screen {

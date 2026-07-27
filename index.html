@@ -116,6 +116,7 @@
     </div>
     <p class="subtitle text-3d-cyan">slay the word horde</p>
     <button class="btn-3d primary" data-action="show-modes">Play</button>
+    <button class="btn-3d" data-action="show-account" id="account-btn">Sign In</button>
     <button class="btn-3d" data-action="open-settings">Settings</button>
     <button class="btn-3d" data-action="show-leaderboard">Leaderboard</button>
   </section>
@@ -133,18 +134,118 @@
         <span class="mode-card-name">Classic</span>
         <span class="mode-card-desc">Pure endless survival. No bosses, just the rising horde.</span>
       </button>
-      <button class="mode-card locked" disabled>
+      <button class="mode-card" data-action="show-versus-setup" data-online="0">
         <span class="mode-card-icon">&#129302;</span>
         <span class="mode-card-name">Versus AI</span>
-        <span class="mode-card-desc">Rumble &amp; Tower against bots. Coming next.</span>
+        <span class="mode-card-desc">Royal Rumble or Tower 4v4 against bots. Four difficulty tiers.</span>
       </button>
-      <button class="mode-card locked" disabled>
+      <button class="mode-card" data-action="show-online">
         <span class="mode-card-icon">&#127760;</span>
         <span class="mode-card-name">Multiplayer</span>
-        <span class="mode-card-desc">Royal Rumble (6p) &amp; Tower 4v4 online. Coming soon.</span>
+        <span class="mode-card-desc">Royal Rumble (6p) &amp; Tower 4v4 online with friends.</span>
       </button>
     </div>
     <button class="btn-3d" data-action="back-to-menu">Back</button>
+  </section>
+
+  <section id="screen-versus" class="screen hidden">
+    <h1 class="title text-3d-gold">VERSUS</h1>
+    <p class="subtitle text-3d-cyan">combos launch words at your rivals</p>
+
+    <div class="setup-group">
+      <span class="setup-label">Format</span>
+      <div class="chip-row" id="format-row">
+        <button class="pick-chip selected" data-action="pick-format" data-format="rumble">Royal Rumble</button>
+        <button class="pick-chip" data-action="pick-format" data-format="tower">Tower 4v4</button>
+      </div>
+      <p class="setup-hint" id="format-hint">Up to 6 fighters. Last one standing wins.</p>
+    </div>
+
+    <div class="setup-group">
+      <span class="setup-label">Difficulty</span>
+      <div class="chip-row" id="difficulty-row">
+        <button class="pick-chip" data-action="pick-difficulty" data-difficulty="easy">Easy</button>
+        <button class="pick-chip selected" data-action="pick-difficulty" data-difficulty="normal">Normal</button>
+        <button class="pick-chip" data-action="pick-difficulty" data-difficulty="hard">Hard</button>
+        <button class="pick-chip" data-action="pick-difficulty" data-difficulty="typist">Typist</button>
+      </div>
+      <p class="setup-hint" id="difficulty-hint">Adept &mdash; 40 WPM, 93% accuracy.</p>
+    </div>
+
+    <div class="setup-group" id="content-group">
+      <span class="setup-label">Content</span>
+      <div class="chip-row">
+        <button class="pick-chip selected" data-action="pick-content" data-text="words">Words</button>
+        <button class="pick-chip" data-action="pick-content" data-text="programming">Code</button>
+        <button class="pick-chip" data-action="pick-content" data-text="sentences">Sentences</button>
+      </div>
+    </div>
+
+    <button class="btn-3d primary" data-action="start-versus">Fight</button>
+    <button class="btn-3d" data-action="back-to-modes">Back</button>
+  </section>
+
+  <section id="screen-online" class="screen hidden">
+    <h1 class="title text-3d-gold">MULTIPLAYER</h1>
+    <p class="subtitle text-3d-cyan" id="online-status">connect to play with friends</p>
+
+    <div class="setup-group">
+      <span class="setup-label">Format</span>
+      <div class="chip-row">
+        <button class="pick-chip selected" data-action="pick-online-format" data-format="rumble">Royal Rumble</button>
+        <button class="pick-chip" data-action="pick-online-format" data-format="tower">Tower 4v4</button>
+      </div>
+    </div>
+
+    <button class="btn-3d primary" data-action="create-room">Create Room</button>
+
+    <div class="join-row">
+      <input id="room-code-input" class="pixel-input" maxlength="5" placeholder="CODE" autocomplete="off" spellcheck="false">
+      <button class="btn-3d join-btn" data-action="join-room">Join</button>
+    </div>
+
+    <p class="setup-hint" id="online-error"></p>
+    <button class="btn-3d" data-action="back-to-modes">Back</button>
+  </section>
+
+  <section id="screen-lobby" class="screen hidden">
+    <h1 class="title text-3d-gold">LOBBY</h1>
+    <div class="room-code-display">
+      <span class="setup-label">Room Code</span>
+      <span class="room-code" id="lobby-code">-----</span>
+      <button class="btn-3d toggle-btn" data-action="copy-code">Copy</button>
+    </div>
+    <ul class="lobby-list pixel-panel" id="lobby-players"></ul>
+    <p class="setup-hint" id="lobby-hint">waiting for players...</p>
+    <button class="btn-3d primary hidden" id="lobby-start-btn" data-action="start-online">Start Match</button>
+    <button class="btn-3d" data-action="leave-room">Leave</button>
+  </section>
+
+  <section id="screen-auth" class="screen hidden">
+    <h1 class="title text-3d-gold" id="auth-title">SIGN IN</h1>
+    <p class="subtitle text-3d-cyan" id="auth-subtitle">save your scores to the global board</p>
+    <div class="auth-form pixel-panel">
+      <input id="auth-username" class="pixel-input full hidden" placeholder="USERNAME" autocomplete="username" maxlength="16" spellcheck="false">
+      <input id="auth-email" class="pixel-input full" type="email" placeholder="EMAIL" autocomplete="email" spellcheck="false">
+      <input id="auth-password" class="pixel-input full" type="password" placeholder="PASSWORD" autocomplete="current-password">
+      <p class="auth-error" id="auth-error"></p>
+      <button class="btn-3d primary" id="auth-submit" data-action="auth-submit">Sign In</button>
+      <button class="btn-3d" data-action="auth-toggle" id="auth-toggle">Create an account</button>
+    </div>
+    <button class="btn-3d" data-action="back-to-menu">Back</button>
+  </section>
+
+  <section id="screen-profile" class="screen hidden">
+    <h1 class="title text-3d-gold">PROFILE</h1>
+    <div class="stats pixel-panel tilt-panel">
+      <div class="stat-row"><span>Player</span><span id="profile-name">-</span></div>
+      <div class="stat-row"><span>Best Score</span><span id="profile-best">0</span></div>
+      <div class="stat-row"><span>Runs Played</span><span id="profile-runs">0</span></div>
+      <div class="stat-row"><span>Best WPM</span><span id="profile-wpm">0</span></div>
+      <div class="stat-row"><span>Bosses Slain</span><span id="profile-bosses">0</span></div>
+    </div>
+    <button class="btn-3d" data-action="sign-out">Sign Out</button>
+    <button class="btn-3d primary" data-action="back-to-menu">Back</button>
   </section>
 
   <section id="screen-text" class="screen hidden">
@@ -212,6 +313,26 @@
     <ol id="leaderboard-list" class="leaderboard-list pixel-panel tilt-panel"></ol>
     <button class="btn-3d primary" data-action="close-leaderboard">Back</button>
   </section>
+
+  <div id="opponent-rail" class="hidden"></div>
+
+  <div id="tower-hud" class="hidden">
+    <div class="tower-side" id="tower-side-A">
+      <span class="tower-tag team-a">TEAM A</span>
+      <div class="tower-bar-outer">
+        <div class="tower-bar-fill team-a-fill" id="tower-fill-A"></div>
+        <span class="tower-bar-text" id="tower-text-A">50 / 50</span>
+      </div>
+    </div>
+    <div class="tower-round" id="tower-round">ROUND 1</div>
+    <div class="tower-side" id="tower-side-B">
+      <span class="tower-tag team-b">TEAM B</span>
+      <div class="tower-bar-outer">
+        <div class="tower-bar-fill team-b-fill" id="tower-fill-B"></div>
+        <span class="tower-bar-text" id="tower-text-B">50 / 50</span>
+      </div>
+    </div>
+  </div>
 
   <div id="vignette"></div>
   <div id="scanlines"></div>

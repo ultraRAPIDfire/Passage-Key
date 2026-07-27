@@ -16,6 +16,16 @@ import {
 } from './sprites.js';
 import { generateText, generateBossPhrase } from './wordgen.js';
 import { bossForLevel, isBossLevel, updateBoss, damageBoss, bossVolleySize, drawBoss, BOSS_INTERVAL } from './boss.js';
+import {
+  AI_PROFILES, createRumble, createTower, tickVersus, playerAttack, damagePlayer,
+  damageTower, enemyTeamOf, teamOf, attackForCombo,
+  TOWER_MAX_HP, TOWER_WORD_DAMAGE, RUMBLE_MAX_HP, TOWER_ROUNDS,
+} from './versus.js';
+import { OnlineRoom, generateRoomCode } from './online.js';
+import {
+  isConfigured as supabaseReady, signIn, signUp, signOut,
+  getSession, getProfile, submitScore, onAuthChange,
+} from './supabase.js';
 
 const MODE_FONT_SIZE = { words: 18, programming: 15, sentences: 13 };
 const CHIP_COLORS = ['#00f6ff', '#ff2ec4', '#ffd83d', '#37ff8b', '#ff8a3d', '#7f5cff'];
@@ -108,11 +118,46 @@ const screens = {
   menu: $('screen-menu'),
   mode: $('screen-mode'),
   text: $('screen-text'),
+  versus: $('screen-versus'),
+  online: $('screen-online'),
+  lobby: $('screen-lobby'),
+  auth: $('screen-auth'),
+  profile: $('screen-profile'),
   settings: $('screen-settings'),
   skill: $('screen-skill'),
   result: $('screen-result'),
   leaderboard: $('screen-leaderboard'),
 };
+
+// versus + online DOM
+const opponentRail = $('opponent-rail');
+const towerHud = $('tower-hud');
+const towerFill = { A: $('tower-fill-A'), B: $('tower-fill-B') };
+const towerText = { A: $('tower-text-A'), B: $('tower-text-B') };
+const towerRoundEl = $('tower-round');
+const formatHint = $('format-hint');
+const difficultyHint = $('difficulty-hint');
+const onlineStatus = $('online-status');
+const onlineError = $('online-error');
+const roomCodeInput = $('room-code-input');
+const lobbyCode = $('lobby-code');
+const lobbyPlayers = $('lobby-players');
+const lobbyHint = $('lobby-hint');
+const lobbyStartBtn = $('lobby-start-btn');
+const accountBtn = $('account-btn');
+const authTitle = $('auth-title');
+const authSubtitle = $('auth-subtitle');
+const authUsername = $('auth-username');
+const authEmail = $('auth-email');
+const authPassword = $('auth-password');
+const authError = $('auth-error');
+const authSubmit = $('auth-submit');
+const authToggle = $('auth-toggle');
+const profileName = $('profile-name');
+const profileBest = $('profile-best');
+const profileRuns = $('profile-runs');
+const profileWpm = $('profile-wpm');
+const profileBosses = $('profile-bosses');
 
 const resultTitle = $('result-title');
 const resultScore = $('result-score');
@@ -158,6 +203,26 @@ let boss = null;
 let lastBossLevel = 0;
 let bossesDefeated = 0;
 let pendingBossLevel = 0;
+
+// versus / online
+let vs = null;
+let versusFormat = 'rumble';
+let versusDifficulty = 'normal';
+let onlineFormat = 'rumble';
+let onlineRoom = null;
+let isOnlineMatch = false;
+let towerRoundActive = false;
+let nextWordId = 1;
+let playerPlacement = 0;
+
+// auth
+let authMode = 'signin';
+let currentSession = null;
+let currentProfile = null;
+
+const isVersus = () => vs !== null;
+const isTower = () => vs && vs.format === 'tower';
+const isRumble = () => vs && vs.format === 'rumble';
 
 let spawnIntervalMs = 2000;
 let baseSpeed = 50;
@@ -510,11 +575,14 @@ function makeWord(text, opts = {}) {
   const pattern = opts.pattern || pickPattern();
   const speed = (baseSpeed + level * 10) * getTimeAcceleration() * (opts.speedMult || 1);
   const word = {
+    id: nextWordId++,
     text, x, baseX: x, y: opts.y ?? -40, typed: 0, speed, color, width: textWidth,
     seed: Math.random() * 10, pattern,
     type: MONSTER_TYPES[Math.floor(Math.random() * MONSTER_TYPES.length)],
     hitFlash: 0,
     fromBoss: !!opts.fromBoss,
+    claimedBy: null,
+    isGarbage: false,
   };
   if (pattern === 'sine') {
     word.sineAmp = 20 + Math.random() * 40;
@@ -624,6 +692,7 @@ function resetGame() {
   lastBossLevel = 0;
   pendingBossLevel = 0;
   bossesDefeated = 0;
+  towerRoundActive = false;
   spawnIntervalMs = 2000;
   baseSpeed = 50;
   lastSpawn = 0;
@@ -679,6 +748,10 @@ function leaveToMenu() {
   actionBar.classList.add('hidden');
   vitals.classList.add('hidden');
   bossBar.classList.add('hidden');
+  opponentRail.classList.add('hidden');
+  towerHud.classList.add('hidden');
+  vs = null;
+  if (onlineRoom) { onlineRoom.leave().catch(() => {}); onlineRoom = null; }
   showScreen('menu');
 }
 
@@ -822,6 +895,22 @@ function registerKill(word, { silent = false } = {}) {
     if (killed) endBossFight();
   }
 
+  // Versus: clearing words is how you hurt the other side.
+  if (isTower()) {
+    damageTower(vs, enemyTeamOf(vs.player.team), TOWER_WORD_DAMAGE);
+    updateTowerHud();
+    spawnFx(`-${TOWER_WORD_DAMAGE} TOWER`, cx, word.y - 26, 'skill');
+    if (onlineRoom) onlineRoom.completeWord(word.id, vs.player.team);
+  } else if (isRumble()) {
+    vs.player.combo = combo;
+    const target = playerAttack(vs, combo);
+    if (target) {
+      spawnFx(`→ ${target.name}`, canvas.width / 2, canvas.height * 0.26, 'skill');
+      if (onlineRoom) onlineRoom.attack(target.id, attackForCombo(combo));
+    }
+    renderOpponentRail();
+  }
+
   const xpGain = word.text.length * 2 + Math.floor(combo / 5) * 2;
   spawnFx(`+${Math.round(xpGain)} XP`, cx, word.y + 26, 'xp');
 
@@ -862,6 +951,8 @@ function onWordCompleted(word) {
 
 function activatePower() {
   if (state !== 'playing' || paused) return;
+  // Tower deliberately has no ultimate — skills only.
+  if (isTower()) { sfxPowerDenied(); return; }
   if (mana < MANA_MAX) { sfxPowerDenied(); return; }
   if (words.length === 0) return;
 
@@ -887,6 +978,10 @@ function onWordMissed(word) {
   words.splice(words.indexOf(word), 1);
   if (activeWord === word) activeWord = null;
 
+  // Tower is a race, not a survival test: a dropped word is a lost opportunity
+  // rather than damage, since all damage is dealt to the enemy tower.
+  if (isTower()) return;
+
   if (shieldCharges > 0) {
     shieldCharges -= 1;
     spawnFx('BLOCKED!', word.x + word.width / 2, canvas.height - 90, 'skill');
@@ -911,6 +1006,15 @@ function onWordMissed(word) {
   pulseChip(hpRow, 'pulse-bad');
 
   updateHud();
+
+  if (isRumble()) {
+    vs.player.hp = health;
+    vs.player.combo = combo;
+    renderOpponentRail();
+    if (health <= 0) { damagePlayer(vs, 999); return; }
+    return;
+  }
+
   if (health <= 0) { health = 0; endGame(); }
 }
 
@@ -972,6 +1076,14 @@ function chooseSkill(index) {
   updateHud();
   paused = false;
   showScreen(null);
+
+  // Tower drafts a skill before each round, then the round begins.
+  if (isTower() && !towerRoundActive) {
+    towerRoundActive = true;
+    lastSpawn = performance.now();
+    showBanner('FIGHT!');
+    return;
+  }
 
   // A queued boss enters once the reward is chosen.
   if (pendingBossLevel) {
@@ -1060,15 +1172,226 @@ function updateSkillBarUI() {
   }
 }
 
+// ---------- versus ----------
+
+function renderOpponentRail() {
+  if (!vs) return;
+  const list = isTower()
+    ? [...teamOf(vs, 'A'), ...teamOf(vs, 'B')]
+    : vs.opponents;
+
+  opponentRail.innerHTML = '';
+  for (const op of list) {
+    const card = document.createElement('div');
+    card.className = 'opp-card';
+    if (!op.alive) card.classList.add('dead');
+    if (op.flash > 0) card.classList.add('clear');
+
+    const maxHp = RUMBLE_MAX_HP;
+    const pct = isTower() ? 100 : Math.max(0, (op.hp / maxHp) * 100);
+    const teamCls = op.team ? (op.team === 'A' ? 'team-a' : 'team-b') : '';
+
+    card.innerHTML = `
+      <div class="opp-head">
+        <span class="opp-name ${op.isHuman ? 'is-you' : ''}">${op.isHuman ? 'YOU' : op.name}</span>
+        <span class="opp-combo">${op.combo > 0 ? 'x' + op.combo : ''}</span>
+      </div>
+      <div class="opp-bar-outer">
+        <div class="opp-bar-fill ${teamCls}" style="width:${isTower() ? 100 : pct}%"></div>
+      </div>
+      ${op.pressure > 0 ? `<div class="opp-pressure">! ${op.pressure} incoming</div>` : ''}
+    `;
+    opponentRail.appendChild(card);
+  }
+}
+
+function updateTowerHud() {
+  if (!isTower()) return;
+  for (const team of ['A', 'B']) {
+    const hp = vs.towers[team];
+    towerFill[team].style.width = `${(hp / TOWER_MAX_HP) * 100}%`;
+    towerText[team].textContent = `${hp} / ${TOWER_MAX_HP}`;
+  }
+  towerRoundEl.textContent = `ROUND ${vs.round}`;
+}
+
+// Tower bots pull from the same on-screen pool the player types from.
+const towerApi = {
+  claimWord(op) {
+    const free = words.filter(w => !w.claimedBy && w.y > 40);
+    if (free.length === 0) return null;
+    // prefer the lowest word — the most urgent one
+    free.sort((a, b) => b.y - a.y);
+    const word = free[Math.floor(Math.random() * Math.min(3, free.length))];
+    word.claimedBy = op;
+    return word;
+  },
+  isWordValid(word) {
+    return words.includes(word) && word.claimedBy && !word.claimedBy.isHuman;
+  },
+  releaseWord(word) {
+    if (words.includes(word)) word.claimedBy = null;
+  },
+  completeWord(word, op) {
+    const idx = words.indexOf(word);
+    if (idx === -1) return;
+    words.splice(idx, 1);
+    const cx = word.x + word.width / 2;
+    spawnExplosion(cx, word.y, op.team === 'A' ? '#7fe8ff' : '#ff8ad0');
+    spawnParticles(cx, word.y, 10, [op.team === 'A' ? '#7fe8ff' : '#ff8ad0', '#ffffff']);
+    damageTower(vs, enemyTeamOf(op.team), TOWER_WORD_DAMAGE);
+    updateTowerHud();
+  },
+};
+
+function startVersus(format, difficulty, online = false) {
+  gameplayMode = format;
+  versusFormat = format;
+  versusDifficulty = difficulty;
+  isOnlineMatch = online;
+  playerPlacement = 0;
+
+  vs = format === 'tower'
+    ? createTower({ difficulty, playerName: currentProfile?.username || 'You' })
+    : createRumble({ botCount: 5, difficulty, playerName: currentProfile?.username || 'You' });
+
+  startGame();
+
+  opponentRail.classList.remove('hidden');
+  towerHud.classList.toggle('hidden', format !== 'tower');
+  if (format === 'tower') {
+    // Tower has no mana ultimate by design — the race is the pressure.
+    actionBar.querySelector('.mana-orb-wrap').classList.add('hidden');
+    vitals.classList.add('hidden');
+    updateTowerHud();
+    beginTowerRound();
+  } else {
+    actionBar.querySelector('.mana-orb-wrap').classList.remove('hidden');
+    health = RUMBLE_MAX_HP;
+    maxHealth = RUMBLE_MAX_HP;
+    updateHud();
+  }
+  renderOpponentRail();
+}
+
+// Every tower round opens with a skill draft, per the format's rules.
+function beginTowerRound() {
+  towerRoundActive = false;
+  paused = true;
+  showBanner(`ROUND ${vs.round}`);
+  setTimeout(() => openSkillChoice(), 500);
+}
+
+function processVersusEvents(events) {
+  for (const ev of events) {
+    switch (ev.type) {
+      case 'incoming': {
+        // Garbage words rain onto the player's board.
+        for (let i = 0; i < ev.count; i++) {
+          const w = makeWord(generateFitting('normal', contentDifficulty()), {
+            y: -40 - i * 44, color: '#ff4d5e', pattern: 'straight', speedMult: 1.15,
+          });
+          w.isGarbage = true;
+          words.push(w);
+        }
+        spawnFx(`${ev.from?.name || 'Rival'} sent ${ev.count}!`, canvas.width / 2, canvas.height * 0.3, 'combo');
+        addShake(6, 0.3);
+        sfxMonsterRoar(0.4);
+        break;
+      }
+      case 'eliminated':
+        spawnFx(`${ev.target.isHuman ? 'YOU' : ev.target.name} OUT!`, canvas.width / 2, canvas.height * 0.36, 'combo mega');
+        bigShake();
+        // Once you're knocked out the run is over for you, even though the
+        // remaining bots would otherwise keep fighting.
+        if (ev.target.isHuman && !vs.finished) {
+          playerPlacement = vs.opponents.filter(o => o.alive).length + 1;
+          paused = true;
+          setTimeout(() => { if (vs) endVersus(null); }, 1400);
+        }
+        break;
+      case 'round-end':
+        showBanner(`TEAM ${ev.winner} TAKES ROUND ${ev.round}`);
+        triggerScreenFlash();
+        bigShake();
+        break;
+      case 'round-start':
+        words = [];
+        activeWord = null;
+        updateTowerHud();
+        beginTowerRound();
+        break;
+      case 'finished':
+        endVersus(ev.winner);
+        break;
+    }
+  }
+}
+
+function endVersus(winner) {
+  const playerWon = isTower()
+    ? winner === 'A'
+    : (winner && winner.isHuman);
+
+  state = 'result';
+  hud.classList.add('hidden');
+  actionBar.classList.add('hidden');
+  vitals.classList.add('hidden');
+  opponentRail.classList.add('hidden');
+  towerHud.classList.add('hidden');
+  stopMusic();
+  playerWon ? sfxLevelUp() : sfxGameOver();
+  bigShake();
+
+  const elapsedMinutes = Math.max((performance.now() - gameStartTime) / 60000, 1 / 60);
+  const accuracy = totalKeystrokes > 0 ? Math.round((correctKeystrokes / totalKeystrokes) * 100) : 100;
+  const wpm = Math.round((correctKeystrokes / 5) / elapsedMinutes);
+
+  if (playerWon) {
+    resultTitle.textContent = 'VICTORY!';
+  } else if (isRumble() && playerPlacement) {
+    resultTitle.textContent = `KNOCKED OUT — #${playerPlacement}`;
+  } else {
+    resultTitle.textContent = 'DEFEAT';
+  }
+  resultScore.textContent = score;
+  resultCombo.textContent = maxCombo;
+  resultWords.textContent = wordsTypedTotal;
+  resultBosses.textContent = 0;
+  resultLevel.textContent = level;
+  resultAccuracy.textContent = `${accuracy}%`;
+  resultWpm.textContent = wpm;
+
+  const entry = {
+    score, level, accuracy, wpm, bestCombo: maxCombo,
+    mode: `${versusFormat}/${textMode}`, bosses: 0,
+    date: new Date().toISOString(),
+  };
+  saveScore(entry);
+  submitScore(entry).catch(() => {});
+
+  vs = null;
+  if (onlineRoom) { onlineRoom.leave().catch(() => {}); onlineRoom = null; }
+  showScreen('result');
+}
+
 // ---------- typing ----------
 
 function handleTypedChar(char) {
   if (state !== 'playing' || paused) return;
 
   if (!activeWord) {
-    const candidates = words.filter(w => w.text[0] === char).sort((a, b) => b.y - a.y);
+    // In Tower the pool is shared, so a word another player has claimed is
+    // off-limits until they finish or fumble it.
+    const candidates = words
+      .filter(w => w.text[0] === char && (!w.claimedBy || w.claimedBy.isHuman))
+      .sort((a, b) => b.y - a.y);
     if (candidates.length === 0) return;
     activeWord = candidates[0];
+    if (isTower()) {
+      activeWord.claimedBy = vs.player;
+      if (onlineRoom) onlineRoom.claimWord(activeWord.id);
+    }
   }
 
   const expected = activeWord.text[activeWord.typed];
@@ -1084,6 +1407,13 @@ function handleTypedChar(char) {
     combo = passiveCounts.comboguard > 0 ? Math.floor(combo / 2) : 0;
     sfxKeyError();
     addShake(2, 0.1);
+    // Release the claim so a teammate can rescue the word.
+    if (isTower() && activeWord) {
+      activeWord.claimedBy = null;
+      activeWord.typed = 0;
+      if (onlineRoom) onlineRoom.releaseWord(activeWord.id);
+      activeWord = null;
+    }
     updateHud();
   }
 }
@@ -1159,9 +1489,31 @@ function render(now) {
       const halfW = w.width / 2;
       const chipW = w.width + padX * 2;
       const chipH = fontSize + padY * 2;
-      const chipColor = w.fromBoss ? '#5a1030' : (isActive ? '#3a1f80' : '#1a0d3d');
+
+      // A word claimed by someone else is visibly locked out.
+      const takenByOther = w.claimedBy && !w.claimedBy.isHuman;
+      let chipColor = '#1a0d3d';
+      if (w.fromBoss) chipColor = '#5a1030';
+      else if (w.isGarbage) chipColor = '#5a1020';
+      else if (takenByOther) chipColor = '#2b2b3d';
+      else if (isActive) chipColor = '#3a1f80';
+
+      const glowColor = frozen ? '#9fe8ff'
+        : takenByOther ? (w.claimedBy.team === 'A' ? '#7fe8ff' : '#ff8ad0')
+        : w.color;
       drawChip(-halfW - padX, 6, chipW, chipH, chipColor,
-        isActive || frozen || w.fromBoss, frozen ? '#9fe8ff' : w.color);
+        isActive || frozen || w.fromBoss || takenByOther, glowColor);
+
+      if (takenByOther) {
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        ctx.font = '8px "Press Start 2P", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = w.claimedBy.team === 'A' ? '#7fe8ff' : '#ff8ad0';
+        ctx.fillText(w.claimedBy.name, 0, -2);
+        ctx.textAlign = 'left';
+        ctx.restore();
+      }
 
       const typedPart = w.text.slice(0, w.typed);
       const remainingPart = w.text.slice(w.typed);
@@ -1169,7 +1521,8 @@ function render(now) {
       const textY = 6 + chipH / 2;
 
       drawText3D(typedPart, -halfW, textY, '#37ff8b', '#0a3d1e');
-      drawText3D(remainingPart, -halfW + typedWidth, textY, isActive ? '#ffffff' : '#c7c2ff', '#04010c');
+      const bodyColor = takenByOther ? '#6f6f8a' : (isActive ? '#ffffff' : '#c7c2ff');
+      drawText3D(remainingPart, -halfW + typedWidth, textY, bodyColor, '#04010c');
 
       if (isActive) {
         ctx.fillStyle = '#ffd83d';
@@ -1206,6 +1559,7 @@ function render(now) {
 // ---------- main loop ----------
 
 let frostSpawnAccum = 0;
+let railTimer = 0;
 
 function tick(now) {
   const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
@@ -1260,12 +1614,29 @@ function tick(now) {
 
     const speedMult = freezeTimer > 0 ? 0 : (slowTimer > 0 ? 0.5 : 1);
 
+    // Versus: advance bots, then apply whatever they did to us.
+    if (vs) {
+      const events = tickVersus(vs, dt, towerApi);
+      if (events.length) processVersusEvents(events);
+
+      railTimer -= dt;
+      if (railTimer <= 0) {
+        railTimer = 0.2;
+        renderOpponentRail();
+      }
+    }
+
     // Boss fights replace the normal spawner with scripted volleys.
     if (boss) {
       if (updateBoss(boss, dt, canvas.width, canvas.height)) spawnBossVolley();
-    } else if (now - lastSpawn > spawnIntervalMs) {
-      spawnWord();
-      lastSpawn = now;
+    } else {
+      // Tower feeds eight typists from one pool, so it needs a denser stream.
+      const interval = isTower() ? 620 : spawnIntervalMs;
+      const cap = isTower() ? 14 : 999;
+      if (now - lastSpawn > interval && words.length < cap) {
+        spawnWord();
+        lastSpawn = now;
+      }
     }
 
     for (const w of [...words]) {
@@ -1290,6 +1661,219 @@ function tick(now) {
 
   render(now);
   requestAnimationFrame(tick);
+}
+
+// ---------- versus setup UI ----------
+
+function selectChip(el) {
+  const row = el.parentElement;
+  row.querySelectorAll('.pick-chip').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function updateVersusHints() {
+  formatHint.textContent = versusFormat === 'tower'
+    ? '4v4. Shared word pool — each word deals 5 damage to the enemy tower.'
+    : 'Up to 6 fighters. Last one standing wins.';
+  const p = AI_PROFILES[versusDifficulty];
+  difficultyHint.textContent = `${p.label} — ${p.wpm} WPM, ${Math.round(p.accuracy * 100)}% accuracy.`;
+}
+
+// ---------- auth ----------
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const signup = mode === 'signup';
+  authTitle.textContent = signup ? 'CREATE ACCOUNT' : 'SIGN IN';
+  authSubtitle.textContent = signup
+    ? 'claim a name for the global board'
+    : 'save your scores to the global board';
+  authUsername.classList.toggle('hidden', !signup);
+  authSubmit.textContent = signup ? 'Create Account' : 'Sign In';
+  authToggle.textContent = signup ? 'I already have an account' : 'Create an account';
+  authError.textContent = '';
+}
+
+async function handleAuthSubmit() {
+  authError.textContent = '';
+  const email = authEmail.value.trim();
+  const password = authPassword.value;
+  const username = authUsername.value.trim();
+
+  if (!email || !password) {
+    authError.textContent = 'Email and password are required.';
+    return;
+  }
+  if (authMode === 'signup' && username.length < 3) {
+    authError.textContent = 'Username must be at least 3 characters.';
+    return;
+  }
+
+  authSubmit.disabled = true;
+  authSubmit.textContent = 'Please wait...';
+  try {
+    if (authMode === 'signup') {
+      await signUp({ email, password, username });
+      authError.textContent = 'Account created. Check your email if confirmation is required.';
+    } else {
+      await signIn({ email, password });
+    }
+    await refreshSession();
+    if (currentSession) showScreen('menu');
+  } catch (err) {
+    authError.textContent = err.message || 'Something went wrong.';
+  } finally {
+    authSubmit.disabled = false;
+    setAuthMode(authMode);
+  }
+}
+
+async function refreshSession() {
+  currentSession = await getSession();
+  currentProfile = currentSession ? await getProfile(currentSession.user.id) : null;
+  const name = currentProfile?.username;
+  accountBtn.textContent = currentSession ? (name ? name.toUpperCase() : 'PROFILE') : 'Sign In';
+}
+
+function showAccount() {
+  if (!supabaseReady) {
+    showScreen('auth');
+    authError.textContent = 'Online features are not configured on this build.';
+    return;
+  }
+  if (currentSession) {
+    renderProfile();
+    showScreen('profile');
+  } else {
+    setAuthMode('signin');
+    showScreen('auth');
+  }
+}
+
+function renderProfile() {
+  const local = loadLeaderboard();
+  profileName.textContent = currentProfile?.username || 'Player';
+  profileBest.textContent = local.length ? Math.max(...local.map(e => e.score)) : 0;
+  profileRuns.textContent = local.length;
+  profileWpm.textContent = local.length ? Math.max(...local.map(e => e.wpm || 0)) : 0;
+  profileBosses.textContent = local.reduce((s, e) => s + (e.bosses || 0), 0);
+}
+
+// ---------- online ----------
+
+function setOnlineError(msg) { onlineError.textContent = msg || ''; }
+
+function renderLobby() {
+  if (!onlineRoom) return;
+  const players = onlineRoom.playerList;
+  lobbyPlayers.innerHTML = '';
+  for (const p of players) {
+    const li = document.createElement('li');
+    if (p.id === onlineRoom.selfId) li.classList.add('is-self');
+    li.innerHTML = `<span>${p.name || 'Player'}</span>
+      <span class="lobby-badge">${p.host ? 'HOST' : ''}</span>`;
+    lobbyPlayers.appendChild(li);
+  }
+  const min = onlineFormat === 'tower' ? 2 : 2;
+  lobbyHint.textContent = players.length < min
+    ? 'waiting for players...'
+    : `${players.length} in room — host can start`;
+  lobbyStartBtn.classList.toggle('hidden', !onlineRoom.isHost || players.length < min);
+}
+
+function handleOnlineEvent(ev) {
+  switch (ev.type) {
+    case 'roster':
+      renderLobby();
+      break;
+    case 'start':
+      showScreen(null);
+      startVersus(onlineFormat, versusDifficulty, true);
+      break;
+    case 'incoming':
+      processVersusEvents([{ type: 'incoming', from: { name: ev.from }, count: ev.count }]);
+      break;
+    case 'claim': {
+      const w = words.find(x => x.id === ev.wordId);
+      if (w && ev.byId !== onlineRoom.selfId) {
+        w.claimedBy = { name: ev.byName, isHuman: false, team: 'B' };
+      }
+      break;
+    }
+    case 'release': {
+      const w = words.find(x => x.id === ev.wordId);
+      if (w) w.claimedBy = null;
+      break;
+    }
+    case 'complete': {
+      const idx = words.findIndex(x => x.id === ev.wordId);
+      if (idx !== -1) {
+        const w = words[idx];
+        words.splice(idx, 1);
+        spawnExplosion(w.x + w.width / 2, w.y, '#ff8ad0');
+      }
+      if (vs && ev.team) { damageTower(vs, enemyTeamOf(ev.team), TOWER_WORD_DAMAGE); updateTowerHud(); }
+      break;
+    }
+    case 'finished':
+      if (vs) endVersus(ev.winner);
+      break;
+  }
+}
+
+async function createRoom() {
+  setOnlineError('');
+  if (!supabaseReady) { setOnlineError('Multiplayer requires Supabase to be configured.'); return; }
+  const code = generateRoomCode();
+  onlineRoom = new OnlineRoom({
+    code,
+    name: currentProfile?.username || `Guest${Math.floor(Math.random() * 900 + 100)}`,
+    format: onlineFormat,
+    onEvent: handleOnlineEvent,
+  });
+  try {
+    onlineStatus.textContent = 'creating room...';
+    await onlineRoom.connect({ asHost: true });
+    lobbyCode.textContent = code;
+    renderLobby();
+    showScreen('lobby');
+  } catch (err) {
+    onlineRoom = null;
+    setOnlineError(err.message);
+  } finally {
+    onlineStatus.textContent = 'connect to play with friends';
+  }
+}
+
+async function joinRoom() {
+  setOnlineError('');
+  if (!supabaseReady) { setOnlineError('Multiplayer requires Supabase to be configured.'); return; }
+  const code = roomCodeInput.value.trim().toUpperCase();
+  if (code.length < 4) { setOnlineError('Enter the 5-character room code.'); return; }
+
+  onlineRoom = new OnlineRoom({
+    code,
+    name: currentProfile?.username || `Guest${Math.floor(Math.random() * 900 + 100)}`,
+    format: onlineFormat,
+    onEvent: handleOnlineEvent,
+  });
+  try {
+    onlineStatus.textContent = 'joining...';
+    await onlineRoom.connect({ asHost: false });
+    lobbyCode.textContent = code;
+    renderLobby();
+    showScreen('lobby');
+  } catch (err) {
+    onlineRoom = null;
+    setOnlineError(err.message);
+  } finally {
+    onlineStatus.textContent = 'connect to play with friends';
+  }
+}
+
+async function leaveRoom() {
+  if (onlineRoom) { await onlineRoom.leave().catch(() => {}); onlineRoom = null; }
+  showScreen('online');
 }
 
 // ---------- input wiring ----------
@@ -1333,8 +1917,15 @@ document.addEventListener('click', (e) => {
       break;
     case 'back-to-menu': showScreen('menu'); break;
     case 'back-to-modes': showScreen('mode'); break;
-    case 'play-again': startGame(); break;
-    case 'restart-run': startGame(); break;
+    // Versus matches must rebuild their opponents, not just reset the board.
+    case 'play-again':
+    case 'restart-run':
+      if (gameplayMode === 'rumble' || gameplayMode === 'tower') {
+        startVersus(gameplayMode, versusDifficulty, false);
+      } else {
+        startGame();
+      }
+      break;
     case 'go-home': leaveToMenu(); break;
     case 'exit': state = 'menu'; showScreen('menu'); break;
     case 'open-settings': openSettings(); break;
@@ -1352,7 +1943,61 @@ document.addEventListener('click', (e) => {
     case 'activate-power': activatePower(); break;
     case 'activate-skill': activateSkillSlot(Number(target.dataset.slot)); break;
     case 'choose-skill': chooseSkill(Number(target.dataset.index)); break;
+
+    // versus setup
+    case 'show-versus-setup': updateVersusHints(); showScreen('versus'); break;
+    case 'pick-format':
+      versusFormat = target.dataset.format;
+      selectChip(target);
+      updateVersusHints();
+      break;
+    case 'pick-difficulty':
+      versusDifficulty = target.dataset.difficulty;
+      selectChip(target);
+      updateVersusHints();
+      break;
+    case 'pick-content':
+      textMode = target.dataset.text;
+      selectChip(target);
+      break;
+    case 'start-versus':
+      startVersus(versusFormat, versusDifficulty, false);
+      break;
+
+    // online
+    case 'show-online':
+      setOnlineError(supabaseReady ? '' : 'Multiplayer requires Supabase to be configured.');
+      showScreen('online');
+      break;
+    case 'pick-online-format':
+      onlineFormat = target.dataset.format;
+      selectChip(target);
+      break;
+    case 'create-room': createRoom(); break;
+    case 'join-room': joinRoom(); break;
+    case 'leave-room': leaveRoom(); break;
+    case 'start-online': if (onlineRoom) onlineRoom.startMatch(); break;
+    case 'copy-code':
+      navigator.clipboard?.writeText(lobbyCode.textContent).catch(() => {});
+      target.textContent = 'Copied';
+      setTimeout(() => { target.textContent = 'Copy'; }, 1200);
+      break;
+
+    // account
+    case 'show-account': showAccount(); break;
+    case 'auth-submit': handleAuthSubmit(); break;
+    case 'auth-toggle': setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); break;
+    case 'sign-out':
+      signOut().then(refreshSession).then(() => showScreen('menu'));
+      break;
   }
+});
+
+// Let Enter submit the auth form and the room-code field.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (!screens.auth.classList.contains('hidden')) handleAuthSubmit();
+  else if (!screens.online.classList.contains('hidden') && document.activeElement === roomCodeInput) joinRoom();
 });
 
 // ---------- boot ----------
@@ -1360,6 +2005,10 @@ document.addEventListener('click', (e) => {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 updateSettingsUI();
+updateVersusHints();
+setAuthMode('signin');
+refreshSession().catch(() => {});
+onAuthChange(() => { refreshSession().catch(() => {}); });
 showScreen('loading');
 runLoadingSequence();
 lastFrameTime = performance.now();
@@ -1374,11 +2023,20 @@ window.PK = {
   get health() { return health; },
   get xp() { return xp; },
   get xpNeeded() { return xpNeeded; },
+  get vs() { return vs; },
+  get combo() { return combo; },
+  get paused() { return paused; },
   startGame,
   grantXp,
   startBossFight,
   spawnBossVolley,
+  startVersus,
   setMode(g, t) { gameplayMode = g; textMode = t; },
+  setCombo(c) { combo = c; },
+  registerKill,
+  makeWord,
+  generateFitting,
+  towerApi,
   xpNeededFor,
   BOSS_INTERVAL,
 };
