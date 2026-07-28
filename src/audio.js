@@ -13,6 +13,17 @@ export let masterVolume = localStorage.getItem(VOLUME_KEY) !== null
   ? Number(localStorage.getItem(VOLUME_KEY))
   : 0.8;
 
+// Independent buses so music can sit under the effects (or be silenced alone).
+const MUSIC_VOL_KEY = 'passageKeyMusicVolume';
+const SFX_VOL_KEY = 'passageKeySfxVolume';
+let musicVolume = localStorage.getItem(MUSIC_VOL_KEY) !== null ? Number(localStorage.getItem(MUSIC_VOL_KEY)) : 1;
+let sfxVolume = localStorage.getItem(SFX_VOL_KEY) !== null ? Number(localStorage.getItem(SFX_VOL_KEY)) : 1;
+
+export function getMusicVolume() { return musicVolume; }
+export function getSfxVolume() { return sfxVolume; }
+export function setMusicVolume(v) { musicVolume = v; localStorage.setItem(MUSIC_VOL_KEY, String(v)); }
+export function setSfxVolume(v) { sfxVolume = v; localStorage.setItem(SFX_VOL_KEY, String(v)); }
+
 // Setters live here: ES module bindings are read-only for importers.
 export function setMuted(v) {
   muted = v;
@@ -87,13 +98,13 @@ export function playNoiseAt(time, duration, volume, filterType, filterFreq) {
 export function tone({ freq, duration, type = 'square', volume = 0.12, slideTo = null, delay = 0 }) {
   if (muted) return;
   const ac = ensureAudio();
-  playOscAt(ac.currentTime + delay, freq, duration, type, volume * masterVolume, slideTo);
+  playOscAt(ac.currentTime + delay, freq, duration, type, volume * masterVolume * sfxVolume, slideTo);
 }
 
 export function noiseBurst({ duration = 0.15, volume = 0.15, filterType = null, filterFreq = 1000 } = {}) {
   if (muted) return;
   const ac = ensureAudio();
-  playNoiseAt(ac.currentTime, duration, volume * masterVolume, filterType, filterFreq);
+  playNoiseAt(ac.currentTime, duration, volume * masterVolume * sfxVolume, filterType, filterFreq);
 }
 
 // ---------- monster voices ----------
@@ -291,15 +302,15 @@ export function scheduleMusic() {
     const stepDur = 60 / musicBpm / 2;
     if (!musicMuted) {
       const freq = noteFreqForStep(musicStep);
-      playOscAt(nextNoteTime, freq, stepDur * 0.9, 'triangle', 0.06 * masterVolume);
+      playOscAt(nextNoteTime, freq, stepDur * 0.9, 'triangle', 0.06 * masterVolume * musicVolume);
       if (musicIntensity >= 3 && musicStep % 2 === 1) {
-        playNoiseAt(nextNoteTime, 0.03, 0.02 * masterVolume, 'highpass', 4000);
+        playNoiseAt(nextNoteTime, 0.03, 0.02 * masterVolume * musicVolume, 'highpass', 4000);
       }
       if (musicIntensity >= 5 && musicStep % 4 === 0) {
-        playOscAt(nextNoteTime, freq * 0.5, stepDur * 1.6, 'sawtooth', 0.035 * masterVolume);
+        playOscAt(nextNoteTime, freq * 0.5, stepDur * 1.6, 'sawtooth', 0.035 * masterVolume * musicVolume);
       }
       if (musicIntensity >= 7 && musicStep % 8 === 4) {
-        playNoiseAt(nextNoteTime, 0.12, 0.045 * masterVolume, 'lowpass', 220);
+        playNoiseAt(nextNoteTime, 0.12, 0.045 * masterVolume * musicVolume, 'lowpass', 220);
       }
     }
     nextNoteTime += stepDur;

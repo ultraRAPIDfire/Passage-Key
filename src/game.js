@@ -7,21 +7,24 @@ import {
   sfxKeyTick, sfxKeyError, sfxWordComplete, sfxCombo, sfxMiss, sfxLevelUp,
   sfxGameOver, sfxUiClick, sfxUiHover, sfxPower, sfxPowerReady, sfxPowerDenied,
   sfxFreeze, sfxWarp, sfxShield, sfxSurge, sfxMonsterRoar, sfxMonsterDeath,
-  startMusic, stopMusic, setMusicForLevel,
+  startMusic, stopMusic, setMusicForLevel, tone,
+  getMusicVolume, getSfxVolume, setMusicVolume, setSfxVolume,
 } from './audio.js';
 import {
   canvas, ctx, HORIZON_RATIO, MONSTER_TYPES, MONSTER_PITCH,
   resizeCanvas, updateStars, drawSky, drawGrid, drawChip, drawText3D,
-  drawMonster, drawPlayer,
+  drawMonster, drawPlayer, setTheme,
 } from './sprites.js';
+import { themeForLevel, updateWeather, drawWeather, drawLightning, resetWeather } from './themes.js';
+import { drawTower } from './tower-sprite.js';
 import { generateText, generateBossPhrase } from './wordgen.js';
 import { bossForLevel, isBossLevel, updateBoss, damageBoss, bossVolleySize, drawBoss, BOSS_INTERVAL } from './boss.js';
 import {
   AI_PROFILES, createRumble, createTower, tickVersus, playerAttack, damagePlayer,
   damageTower, enemyTeamOf, teamOf, attackForCombo,
-  TOWER_MAX_HP, TOWER_WORD_DAMAGE, RUMBLE_MAX_HP, TOWER_ROUNDS,
+  TOWER_MAX_HP, damageForWord, RUMBLE_MAX_HP, TOWER_ROUNDS,
 } from './versus.js';
-import { OnlineRoom, generateRoomCode } from './online.js';
+import { OnlineRoom, generateRoomCode, findOpenRoom } from './online.js';
 import {
   isConfigured as supabaseReady, signIn, signUp, signOut,
   getSession, getProfile, submitScore, onAuthChange,
@@ -49,6 +52,16 @@ const ACTIVE_SKILLS = [
   { id: 'shield', name: 'Word Ward', icon: '⛨', desc: 'Block your next incoming hit', cooldown: 22 },
   { id: 'surge', name: 'Score Surge', icon: '★', desc: 'Double all score for 8s', cooldown: 20 },
   { id: 'manasurge', name: 'Mana Surge', icon: '✦', desc: 'Instantly restore 50 mana', cooldown: 16 },
+  { id: 'meteor', name: 'Meteor', icon: '☄', desc: 'Destroy the 3 lowest enemies instantly', cooldown: 24 },
+  { id: 'purge', name: 'Purge', icon: '☠', desc: 'Wipe every enemy below the halfway line', cooldown: 26 },
+  { id: 'heal', name: 'Mend', icon: '✚', desc: 'Restore 35 HP immediately', cooldown: 28 },
+  { id: 'gale', name: 'Gale', icon: '≋', desc: 'Push every enemy back to the top', cooldown: 22 },
+  { id: 'blink', name: 'Blink Strike', icon: '⟡', desc: 'Instantly clear the most dangerous enemy', cooldown: 12 },
+  { id: 'timestop', name: 'Time Stop', icon: '⏻', desc: 'Freeze everything solid for 4s', cooldown: 30 },
+  { id: 'doubledmg', name: 'Double Damage', icon: '⚔', desc: 'Double all damage for 10s', cooldown: 26 },
+  { id: 'frenzy', name: 'Combo Frenzy', icon: '✹', desc: 'Combo multiplier doubled for 10s', cooldown: 28 },
+  { id: 'poison', name: 'Poison Cloud', icon: '☣', desc: 'Poison every enemy — they rot away', cooldown: 24 },
+  { id: 'rapid', name: 'Rapid Typing', icon: '⚡', desc: 'All skill cooldowns recover 3x for 8s', cooldown: 32 },
 ];
 
 const PASSIVE_SKILLS = [
@@ -58,6 +71,12 @@ const PASSIVE_SKILLS = [
   { id: 'scoreboost', name: 'Greed', icon: '◆', desc: '+15% score from every kill' },
   { id: 'comboguard', name: 'Combo Guard', icon: '⚡', desc: 'Hits halve your combo instead of resetting' },
   { id: 'scholar', name: 'Scholar', icon: '⚛', desc: '+20% XP from every kill' },
+  { id: 'chain', name: 'Chain Lightning', icon: '🗲', desc: 'Each kill arcs to a nearby enemy and destroys it' },
+  { id: 'thorns', name: 'Thorns', icon: '✦', desc: 'Taking a hit destroys 2 random enemies' },
+  { id: 'momentum', name: 'Momentum', icon: '➤', desc: 'Enemies fall 10% slower per stack' },
+  { id: 'fortune', name: 'Fortune', icon: '❈', desc: '15% chance a kill spawns no replacement' },
+  { id: 'crit', name: 'Critical Typing', icon: '✸', desc: '15% chance per stack to deal double damage' },
+  { id: 'fireblast', name: 'Fire Explosion', icon: '✷', desc: 'Kills explode, destroying enemies nearby' },
 ];
 
 // ---------- DOM ----------
@@ -117,9 +136,11 @@ const screens = {
   loading: $('screen-loading'),
   menu: $('screen-menu'),
   mode: $('screen-mode'),
-  text: $('screen-text'),
+  pause: $('screen-pause'),
+  instructions: $('screen-instructions'),
   versus: $('screen-versus'),
   online: $('screen-online'),
+  searching: $('screen-searching'),
   lobby: $('screen-lobby'),
   auth: $('screen-auth'),
   profile: $('screen-profile'),
@@ -131,6 +152,8 @@ const screens = {
 
 // versus + online DOM
 const opponentRail = $('opponent-rail');
+const opponentCards = $('opponent-cards');
+const railToggle = $('rail-toggle');
 const towerHud = $('tower-hud');
 const towerFill = { A: $('tower-fill-A'), B: $('tower-fill-B') };
 const towerText = { A: $('tower-text-A'), B: $('tower-text-B') };
@@ -138,6 +161,14 @@ const towerRoundEl = $('tower-round');
 const formatHint = $('format-hint');
 const difficultyHint = $('difficulty-hint');
 const onlineStatus = $('online-status');
+const searchStatus = $('search-status');
+const volumeValue = $('volume-value');
+const musicVolumeSlider = $('music-volume-slider');
+const musicVolumeValue = $('music-volume-value');
+const sfxVolumeSlider = $('sfx-volume-slider');
+const sfxVolumeValue = $('sfx-volume-value');
+const qualityBtn = $('quality-btn');
+const fullscreenBtn = $('fullscreen-btn');
 const onlineError = $('online-error');
 const roomCodeInput = $('room-code-input');
 const lobbyCode = $('lobby-code');
@@ -198,6 +229,11 @@ let slowTimer = 0;
 let freezeTimer = 0;
 let scoreSurgeTimer = 0;
 let shieldCharges = 0;
+let doubleDamageTimer = 0;
+let comboFrenzyTimer = 0;
+let timeStopTimer = 0;
+let rapidTimer = 0;
+let poisoned = [];
 
 let boss = null;
 let lastBossLevel = 0;
@@ -214,6 +250,15 @@ let isOnlineMatch = false;
 let towerRoundActive = false;
 let nextWordId = 1;
 let playerPlacement = 0;
+let currentTheme = themeForLevel(1);
+let towerHitFlash = { A: 0, B: 0 };
+let pausedByMenu = false;
+let boardsMinimized = false;
+let instructionsReturn = 'menu';
+let fillWithBots = true;
+let searchCancelled = false;
+const QUALITY_LEVELS = ['LOW', 'MEDIUM', 'HIGH'];
+let quality = localStorage.getItem('passageKeyQuality') || 'HIGH';
 
 // auth
 let authMode = 'signin';
@@ -237,6 +282,7 @@ let gameStartTime = 0;
 let particles = [];
 let explosions = [];
 let shockwaves = [];
+let boltPaths = [];
 let shakeTimer = 0;
 let shakeMag = 0;
 
@@ -257,6 +303,35 @@ function updateSettingsUI() {
   musicToggleBtn.textContent = musicMuted ? 'OFF' : 'ON';
   shakeToggleBtn.textContent = shakeEnabled ? 'ON' : 'OFF';
   volumeSlider.value = Math.round(masterVolume * 100);
+  volumeValue.textContent = `${Math.round(masterVolume * 100)}%`;
+  musicVolumeSlider.value = Math.round(getMusicVolume() * 100);
+  musicVolumeValue.textContent = `${Math.round(getMusicVolume() * 100)}%`;
+  sfxVolumeSlider.value = Math.round(getSfxVolume() * 100);
+  sfxVolumeValue.textContent = `${Math.round(getSfxVolume() * 100)}%`;
+  qualityBtn.textContent = quality;
+  fullscreenBtn.textContent = document.fullscreenElement ? 'ON' : 'OFF';
+}
+
+function cycleQuality() {
+  const i = QUALITY_LEVELS.indexOf(quality);
+  quality = QUALITY_LEVELS[(i + 1) % QUALITY_LEVELS.length];
+  localStorage.setItem('passageKeyQuality', quality);
+  applyQuality();
+  updateSettingsUI();
+}
+
+// Lower settings thin out the expensive decorative layers.
+function applyQuality() {
+  document.body.dataset.quality = quality;
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  } else {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+  setTimeout(updateSettingsUI, 150);
 }
 
 function applyMuted(v) { setMuted(v); updateMuteButton(); updateSettingsUI(); }
@@ -264,7 +339,18 @@ function applyMusicMuted(v) { setMusicMuted(v); updateSettingsUI(); }
 function applyShake(v) { setShakeEnabled(v); updateSettingsUI(); }
 
 updateMuteButton();
-volumeSlider.addEventListener('input', (e) => setMasterVolume(Number(e.target.value) / 100));
+volumeSlider.addEventListener('input', (e) => {
+  setMasterVolume(Number(e.target.value) / 100);
+  volumeValue.textContent = `${e.target.value}%`;
+});
+musicVolumeSlider.addEventListener('input', (e) => {
+  setMusicVolume(Number(e.target.value) / 100);
+  musicVolumeValue.textContent = `${e.target.value}%`;
+});
+sfxVolumeSlider.addEventListener('input', (e) => {
+  setSfxVolume(Number(e.target.value) / 100);
+  sfxVolumeValue.textContent = `${e.target.value}%`;
+});
 
 // ---------- screens ----------
 
@@ -280,14 +366,18 @@ function showScreen(name) {
 }
 
 function openSettings() {
-  settingsReturn = (state === 'playing') ? 'game' : 'menu';
+  if (pausedByMenu) settingsReturn = 'pause';
+  else if (state === 'playing') settingsReturn = 'game';
+  else settingsReturn = 'menu';
   if (settingsReturn === 'game') paused = true;
   updateSettingsUI();
   showScreen('settings');
 }
 
 function closeSettings() {
-  if (settingsReturn === 'game') {
+  if (settingsReturn === 'pause') {
+    showScreen('pause');
+  } else if (settingsReturn === 'game') {
     paused = false;
     showScreen(null);
   } else {
@@ -317,7 +407,10 @@ function handleClearLeaderboard() {
 
 // ---------- effects ----------
 
-function comboMultiplier(c) { return 1 + Math.floor(c / 5) * 0.5; }
+function comboMultiplier(c) {
+  const base = 1 + Math.floor(c / 5) * 0.5;
+  return comboFrenzyTimer > 0 ? base * 2 : base;
+}
 
 function spawnFx(text, x, y, variant) {
   const el = document.createElement('div');
@@ -453,6 +546,10 @@ function updateExplosions(dt) {
     s.age += dt;
     if (s.age >= s.maxAge) shockwaves.splice(shockwaves.indexOf(s), 1);
   }
+  for (const b of [...boltPaths]) {
+    b.life -= dt;
+    if (b.life <= 0) boltPaths.splice(boltPaths.indexOf(b), 1);
+  }
 }
 
 function drawExplosions() {
@@ -477,6 +574,31 @@ function drawExplosions() {
     ctx.beginPath();
     ctx.arc(e.x, e.y, Math.max(16 * (1 - t), 0), 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Jagged arc between two points, used by Chain Lightning.
+function drawBolts() {
+  for (const b of boltPaths) {
+    const a = Math.max(0, b.life / b.maxLife);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = '#dff6ff';
+    ctx.shadowColor = '#9fe8ff';
+    ctx.shadowBlur = 14;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    const segs = 6;
+    for (let i = 0; i <= segs; i++) {
+      const k = i / segs;
+      const jitter = i === 0 || i === segs ? 0 : (Math.random() - 0.5) * 22;
+      const x = b.from.x + (b.to.x - b.from.x) * k + jitter;
+      const y = b.from.y + (b.to.y - b.from.y) * k + jitter * 0.4;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
   ctx.globalAlpha = 1;
 }
@@ -573,7 +695,8 @@ function makeWord(text, opts = {}) {
   const x = margin + Math.random() * maxRange;
   const color = opts.color || CHIP_COLORS[Math.floor(Math.random() * CHIP_COLORS.length)];
   const pattern = opts.pattern || pickPattern();
-  const speed = (baseSpeed + level * 10) * getTimeAcceleration() * (opts.speedMult || 1);
+  const momentum = Math.max(0.4, 1 - (passiveCounts.momentum || 0) * 0.1);
+  const speed = (baseSpeed + level * 10) * getTimeAcceleration() * (opts.speedMult || 1) * momentum;
   const word = {
     id: nextWordId++,
     text, x, baseX: x, y: opts.y ?? -40, typed: 0, speed, color, width: textWidth,
@@ -594,6 +717,10 @@ function makeWord(text, opts = {}) {
 }
 
 function spawnWord() {
+  // Fortune occasionally skips a spawn outright, thinning the pressure.
+  const fortune = (passiveCounts.fortune || 0) * 0.15;
+  if (fortune > 0 && Math.random() < fortune) return;
+
   words.push(makeWord(generateFitting('normal', contentDifficulty())));
   if (level >= 4 && Math.random() < 0.25) {
     words.push(makeWord(generateFitting('normal', contentDifficulty()), { y: -80, pattern: 'straight' }));
@@ -701,6 +828,9 @@ function resetGame() {
   wordsTypedTotal = 0;
   gameStartTime = performance.now();
   paused = false;
+  pausedByMenu = false;
+  boltPaths = [];
+  towerHitFlash = { A: 0, B: 0 };
   player.attackTimer = 0;
   player.hurtTimer = 0;
   hudScore.textContent = '0';
@@ -731,6 +861,7 @@ function updateHud() {
 
 function startGame() {
   resetGame();
+  applyTheme(1);
   state = 'playing';
   hud.classList.remove('hidden');
   actionBar.classList.remove('hidden');
@@ -834,8 +965,19 @@ function grantXp(amount) {
   }
 }
 
+function applyTheme(lvl) {
+  // Versus modes stay on the neutral arena so both sides read the same.
+  currentTheme = isVersus() ? themeForLevel(1) : themeForLevel(lvl);
+  setTheme(currentTheme);
+  resetWeather();
+}
+
 function onLevelUp() {
   spawnIntervalMs = Math.max(500, spawnIntervalMs - 190);
+  applyTheme(level);
+  if (gameplayMode === 'adventure' || gameplayMode === 'classic') {
+    spawnFx(currentTheme.name, canvas.width / 2, canvas.height * 0.44, 'skill');
+  }
   pulseChip(xpRow, 'pulse-good');
   showBanner(`LEVEL ${level}!`);
   sfxLevelUp();
@@ -879,6 +1021,9 @@ function registerKill(word, { silent = false } = {}) {
   spawnFx(`+${gained}`, cx, word.y, 'score');
   addShake(2.5, 0.12);
 
+  triggerChainLightning({ x: cx, y: word.y });
+  triggerFireExplosion(cx, word.y);
+
   if (!silent) {
     sfxWordComplete(Math.min(combo, 20));
     sfxMonsterDeath(MONSTER_PITCH[word.type] || 1);
@@ -897,9 +1042,16 @@ function registerKill(word, { silent = false } = {}) {
 
   // Versus: clearing words is how you hurt the other side.
   if (isTower()) {
-    damageTower(vs, enemyTeamOf(vs.player.team), TOWER_WORD_DAMAGE);
+    // One damage per letter, amplified by combo and any active buffs.
+    const crit = (passiveCounts.crit || 0) > 0 && Math.random() < 0.15 * passiveCounts.crit;
+    const dmg = damageForWord(word.text, {
+      comboMult: multiplier,
+      buffMult: (doubleDamageTimer > 0 ? 2 : 1) * scoreBoostMult,
+      crit,
+    });
+    damageTower(vs, enemyTeamOf(vs.player.team), dmg);
     updateTowerHud();
-    spawnFx(`-${TOWER_WORD_DAMAGE} TOWER`, cx, word.y - 26, 'skill');
+    spawnFx(crit ? `CRIT -${dmg}` : `-${dmg}`, cx, word.y - 26, crit ? 'combo mega' : 'skill');
     if (onlineRoom) onlineRoom.completeWord(word.id, vs.player.team);
   } else if (isRumble()) {
     vs.player.combo = combo;
@@ -1004,6 +1156,12 @@ function onWordMissed(word) {
   sfxMiss();
   sfxMonsterRoar(0.5);
   pulseChip(hpRow, 'pulse-bad');
+
+  // Thorns retaliates when you take a hit.
+  if (passiveCounts.thorns > 0) {
+    const victims = [...words].sort(() => Math.random() - 0.5).slice(0, 2 * passiveCounts.thorns);
+    victims.forEach((w, i) => setTimeout(() => destroyWord(w, '#ff8a3d'), i * 80));
+  }
 
   updateHud();
 
@@ -1149,8 +1307,142 @@ function runActiveSkillEffect(id) {
       addShake(4, 0.25);
       updateHud();
       break;
+    case 'meteor': {
+      spawnFx('METEOR!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxPower();
+      const targets = [...words].sort((a, b) => b.y - a.y).slice(0, 3);
+      targets.forEach((w, i) => setTimeout(() => destroyWord(w, '#ff8a3d'), i * 110));
+      addShake(10, 0.45);
+      bigShake();
+      break;
+    }
+    case 'purge': {
+      spawnFx('PURGE!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxPower();
+      const half = canvas.height * 0.5;
+      [...words].filter(w => w.y > half).forEach((w, i) => setTimeout(() => destroyWord(w, '#37ff8b'), i * 60));
+      spawnShockwave(canvas.width / 2, half, '#37ff8b', canvas.width);
+      addShake(9, 0.4);
+      break;
+    }
+    case 'heal':
+      health = Math.min(maxHealth, health + 35);
+      spawnFx('+35 HP', canvas.width / 2, canvas.height * 0.24, 'skill');
+      spawnParticles(player.x, player.y - 30, 34, ['#37ff8b', '#ffffff'], { speed: 190, life: 0.9 });
+      sfxShield();
+      pulseChip(hpRow, 'pulse-good');
+      updateHud();
+      break;
+    case 'gale':
+      spawnFx('GALE!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxWarp();
+      for (const w of words) {
+        w.y = Math.min(w.y, -20 - Math.random() * 60);
+        w.typed = 0;
+      }
+      activeWord = null;
+      spawnShockwave(canvas.width / 2, canvas.height * 0.7, '#9fe8ff', canvas.width);
+      addShake(8, 0.4);
+      break;
+    case 'blink': {
+      const lowest = [...words].sort((a, b) => b.y - a.y)[0];
+      if (lowest) {
+        spawnFx('BLINK STRIKE!', canvas.width / 2, canvas.height * 0.24, 'skill');
+        triggerAttack();
+        destroyWord(lowest, '#00f6ff');
+        addShake(6, 0.3);
+      }
+      break;
+    }
+    case 'timestop':
+      timeStopTimer = 4;
+      setTint('frost');
+      spawnFx('TIME STOP!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxFreeze();
+      spawnShockwave(canvas.width / 2, canvas.height / 2, '#ffffff', canvas.width * 1.1);
+      addShake(10, 0.5);
+      bigShake();
+      break;
+    case 'doubledmg':
+      doubleDamageTimer = 10;
+      setTint('surge');
+      spawnFx('DOUBLE DAMAGE!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxSurge();
+      addShake(6, 0.35);
+      break;
+    case 'frenzy':
+      comboFrenzyTimer = 10;
+      setTint('surge');
+      spawnFx('COMBO FRENZY!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxCombo(true);
+      addShake(6, 0.35);
+      break;
+    case 'poison':
+      spawnFx('POISON CLOUD!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxWarp();
+      for (const w of words) {
+        if (!poisoned.includes(w)) poisoned.push(w);
+        w.poisonTimer = 3.5;
+      }
+      spawnShockwave(canvas.width / 2, canvas.height / 2, '#37ff8b', canvas.width);
+      addShake(5, 0.3);
+      break;
+    case 'rapid':
+      rapidTimer = 8;
+      spawnFx('RAPID TYPING!', canvas.width / 2, canvas.height * 0.24, 'skill');
+      sfxSurge();
+      spawnParticles(player.x, player.y - 30, 30, ['#ffd83d', '#ffffff'], { speed: 220, life: 0.8 });
+      addShake(5, 0.3);
+      break;
   }
   triggerScreenFlash();
+}
+
+// Removes a word with full kill feedback but without combo/score credit,
+// used by skills that delete enemies outright.
+function destroyWord(word, color) {
+  const idx = words.indexOf(word);
+  if (idx === -1) return;
+  words.splice(idx, 1);
+  if (activeWord === word) activeWord = null;
+  const cx = word.x + word.width / 2;
+  spawnExplosion(cx, word.y, color || word.color);
+  spawnParticles(cx, word.y, 18, [color || word.color, '#ffffff'], { speed: 200, life: 0.8 });
+  sfxMonsterDeath(MONSTER_PITCH[word.type] || 1);
+}
+
+// Fire Explosion: a kill detonates, taking out anything caught in the blast.
+function triggerFireExplosion(x, y) {
+  const stacks = passiveCounts.fireblast || 0;
+  if (stacks <= 0) return;
+  const radius = 90 + stacks * 30;
+
+  spawnExplosion(x, y, '#ff8a3d');
+  spawnParticles(x, y, 22, ['#ff8a3d', '#ffd83d', '#ffffff'], { speed: 240, life: 0.7 });
+
+  const caught = words.filter(w => Math.hypot((w.x + w.width / 2) - x, w.y - y) <= radius);
+  caught.forEach((w, i) => setTimeout(() => destroyWord(w, '#ff8a3d'), i * 60));
+  if (caught.length) addShake(5, 0.25);
+}
+
+// Chain Lightning: on each kill, arc to the nearest enemy and destroy it.
+function triggerChainLightning(origin) {
+  const stacks = passiveCounts.chain || 0;
+  if (stacks <= 0 || words.length === 0) return;
+
+  let from = origin;
+  for (let i = 0; i < stacks; i++) {
+    const nearest = words
+      .map(w => ({ w, d: Math.hypot((w.x + w.width / 2) - from.x, w.y - from.y) }))
+      .sort((a, b) => a.d - b.d)[0];
+    if (!nearest) break;
+
+    const to = { x: nearest.w.x + nearest.w.width / 2, y: nearest.w.y };
+    boltPaths.push({ from: { ...from }, to: { ...to }, life: 0.25, maxLife: 0.25 });
+    destroyWord(nearest.w, '#9fe8ff');
+    from = to;
+  }
+  tone({ freq: 1800, duration: 0.12, type: 'square', volume: 0.06, slideTo: 600 });
 }
 
 function updateSkillBarUI() {
@@ -1174,22 +1466,67 @@ function updateSkillBarUI() {
 
 // ---------- versus ----------
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function liveStats() {
+  const mins = Math.max((performance.now() - gameStartTime) / 60000, 1 / 60);
+  return {
+    wpm: Math.round((correctKeystrokes / 5) / mins),
+    acc: totalKeystrokes > 0 ? Math.round((correctKeystrokes / totalKeystrokes) * 100) : 100,
+  };
+}
+
+// Bots report the profile they're actually simulating, so the numbers are honest.
+function botStats(op) {
+  return { wpm: op.profile.wpm, acc: Math.round(op.profile.accuracy * 100) };
+}
+
 function renderOpponentRail() {
   if (!vs) return;
   const list = isTower()
     ? [...teamOf(vs, 'A'), ...teamOf(vs, 'B')]
     : vs.opponents;
 
-  opponentRail.innerHTML = '';
+  opponentCards.innerHTML = '';
   for (const op of list) {
     const card = document.createElement('div');
     card.className = 'opp-card';
     if (!op.alive) card.classList.add('dead');
     if (op.flash > 0) card.classList.add('clear');
 
-    const maxHp = RUMBLE_MAX_HP;
-    const pct = isTower() ? 100 : Math.max(0, (op.hp / maxHp) * 100);
+    const pct = isTower() ? 100 : Math.max(0, (op.hp / RUMBLE_MAX_HP) * 100);
     const teamCls = op.team ? (op.team === 'A' ? 'team-a' : 'team-b') : '';
+
+    // A miniature of what that opponent is facing: bars stand in for words,
+    // dropping toward their danger line as pressure builds.
+    let mini = '';
+    if (!boardsMinimized) {
+      const rows = [];
+      const count = op.isHuman ? Math.min(words.length, 6) : Math.min(op.pressure + (op.target ? 1 : 0) + 1, 6);
+      for (let i = 0; i < count; i++) {
+        const prog = op.isHuman
+          ? Math.min(0.95, (words[i]?.y || 0) / canvas.height)
+          : Math.min(0.95, 0.15 + (i / 6) + (op.pressure * 0.07));
+        const left = 6 + ((i * 37) % 62);
+        const w = 18 + (i % 3) * 8;
+        const danger = prog > 0.72 ? ' danger' : '';
+        rows.push(`<div class="opp-board-word${danger} ${teamCls}" style="left:${left}%;top:${prog * 88}%;width:${w}%"></div>`);
+      }
+      mini = `<div class="opp-board">${rows.join('')}<div class="opp-board-line"></div></div>`;
+    }
+
+    // Live typing stats so players can compare performance mid-match.
+    const stats = op.isHuman ? liveStats() : botStats(op);
+    const typing = op.isHuman
+      ? (activeWord ? activeWord.text : '')
+      : (op.target ? op.target.text : '');
+    const typedFrac = op.isHuman
+      ? (activeWord ? activeWord.typed / activeWord.text.length : 0)
+      : (op.target ? Math.min(1, op.progress / op.target.text.length) : 0);
 
     card.innerHTML = `
       <div class="opp-head">
@@ -1199,10 +1536,22 @@ function renderOpponentRail() {
       <div class="opp-bar-outer">
         <div class="opp-bar-fill ${teamCls}" style="width:${isTower() ? 100 : pct}%"></div>
       </div>
+      <div class="opp-stats">
+        <span>${stats.wpm} WPM</span><span>${stats.acc}%</span>
+      </div>
+      ${typing ? `<div class="opp-typing"><span class="opp-typing-done">${escapeHtml(typing.slice(0, Math.round(typing.length * typedFrac)))}</span>${escapeHtml(typing.slice(Math.round(typing.length * typedFrac)))}</div>` : ''}
       ${op.pressure > 0 ? `<div class="opp-pressure">! ${op.pressure} incoming</div>` : ''}
+      ${mini}
     `;
-    opponentRail.appendChild(card);
+    opponentCards.appendChild(card);
   }
+}
+
+function toggleBoards() {
+  boardsMinimized = !boardsMinimized;
+  opponentRail.classList.toggle('minimized', boardsMinimized);
+  railToggle.innerHTML = boardsMinimized ? '&#9650; SHOW' : '&#9660; HIDE';
+  renderOpponentRail();
 }
 
 function updateTowerHud() {
@@ -1239,21 +1588,41 @@ const towerApi = {
     const cx = word.x + word.width / 2;
     spawnExplosion(cx, word.y, op.team === 'A' ? '#7fe8ff' : '#ff8ad0');
     spawnParticles(cx, word.y, 10, [op.team === 'A' ? '#7fe8ff' : '#ff8ad0', '#ffffff']);
-    damageTower(vs, enemyTeamOf(op.team), TOWER_WORD_DAMAGE);
+    damageTower(vs, enemyTeamOf(op.team), damageForWord(word.text, { comboMult: 1 + Math.floor(op.combo / 5) * 0.5 }));
     updateTowerHud();
   },
 };
 
-function startVersus(format, difficulty, online = false) {
+function startVersus(format, difficulty, online = false, roster = null) {
   gameplayMode = format;
   versusFormat = format;
   versusDifficulty = difficulty;
   isOnlineMatch = online;
   playerPlacement = 0;
 
+  const capacity = format === 'tower' ? 8 : 6;
+  const humans = roster ? roster.filter(p => p.id !== onlineRoom?.selfId).length : 0;
+  // Seats not taken by real players are filled by bots unless disabled.
+  const botCount = fillWithBots
+    ? Math.max(0, capacity - 1 - humans)
+    : Math.max(0, (format === 'tower' ? capacity - 1 - humans : 0));
+
   vs = format === 'tower'
     ? createTower({ difficulty, playerName: currentProfile?.username || 'You' })
-    : createRumble({ botCount: 5, difficulty, playerName: currentProfile?.username || 'You' });
+    : createRumble({ botCount, difficulty, playerName: currentProfile?.username || 'You' });
+
+  // Give the bots that stand in for real players their actual names, and stop
+  // simulating them locally so network events drive them instead.
+  if (roster) {
+    const others = roster.filter(p => p.id !== onlineRoom?.selfId);
+    const slots = vs.opponents.filter(o => !o.isHuman);
+    others.forEach((p, i) => {
+      if (!slots[i]) return;
+      slots[i].name = p.name || 'Player';
+      slots[i].isAI = false;
+      slots[i].netId = p.id;
+    });
+  }
 
   startGame();
 
@@ -1309,6 +1678,9 @@ function processVersusEvents(events) {
           paused = true;
           setTimeout(() => { if (vs) endVersus(null); }, 1400);
         }
+        break;
+      case 'tower-damage':
+        towerHitFlash[ev.team] = 0.16;
         break;
       case 'round-end':
         showBanner(`TEAM ${ev.winner} TAKES ROUND ${ev.round}`);
@@ -1419,13 +1791,27 @@ function handleTypedChar(char) {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (state !== 'playing' || paused) return;
-  if (e.ctrlKey && ['1', '2', '3', '4'].includes(e.key)) {
+  // Escape toggles the pause menu from anywhere in a run.
+  if (e.key === 'Escape') {
     e.preventDefault();
-    if (e.key === '1') activatePower();
-    else activateSkillSlot(Number(e.key) - 2);
+    if (state === 'playing') togglePause();
     return;
   }
+
+  if (state !== 'playing' || paused) return;
+
+  // Enter fires the ultimate; Ctrl+1/2/3 fire the three skill slots.
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    activatePower();
+    return;
+  }
+  if (e.ctrlKey && ['1', '2', '3'].includes(e.key)) {
+    e.preventDefault();
+    activateSkillSlot(Number(e.key) - 1);
+    return;
+  }
+
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key.length === 1) handleTypedChar(e.key.toLowerCase());
 });
@@ -1460,6 +1846,14 @@ function render(now) {
   drawGrid(now);
 
   if (state === 'playing') {
+    // Tower mode plants a real fortress for each side behind the play field.
+    if (isTower()) {
+      // Kept clear of the opponent rail on the right so both towers stay visible.
+      const groundY = canvas.height * HORIZON_RATIO + 120;
+      drawTower(ctx, canvas.width * 0.12, groundY, vs.towers.A / TOWER_MAX_HP, 'A', now, towerHitFlash.A);
+      drawTower(ctx, canvas.width * 0.66, groundY, vs.towers.B / TOWER_MAX_HP, 'B', now, towerHitFlash.B);
+    }
+
     if (boss) drawBoss(ctx, boss, now);
 
     const t = now / 1000;
@@ -1551,9 +1945,14 @@ function render(now) {
   }
 
   drawShockwaves();
+  drawBolts();
   drawExplosions();
   drawParticles();
+  drawWeather(ctx, currentTheme, canvas.width, canvas.height);
   ctx.restore();
+
+  // Lightning washes the whole frame, so it sits outside the shake transform.
+  drawLightning(ctx, canvas.width, canvas.height);
 }
 
 // ---------- main loop ----------
@@ -1568,6 +1967,8 @@ function tick(now) {
   updateStars(dt);
   updateParticles(dt);
   updateExplosions(dt);
+  updateWeather(currentTheme, dt, canvas.width, canvas.height);
+  for (const k of ['A', 'B']) if (towerHitFlash[k] > 0) towerHitFlash[k] = Math.max(0, towerHitFlash[k] - dt);
   if (shakeTimer > 0) {
     shakeTimer = Math.max(0, shakeTimer - dt);
     if (shakeTimer === 0) shakeMag = 0;
@@ -1582,6 +1983,23 @@ function tick(now) {
     if (slowTimer > 0) slowTimer = Math.max(0, slowTimer - dt);
     if (freezeTimer > 0) freezeTimer = Math.max(0, freezeTimer - dt);
     if (scoreSurgeTimer > 0) scoreSurgeTimer = Math.max(0, scoreSurgeTimer - dt);
+    if (doubleDamageTimer > 0) doubleDamageTimer = Math.max(0, doubleDamageTimer - dt);
+    if (comboFrenzyTimer > 0) comboFrenzyTimer = Math.max(0, comboFrenzyTimer - dt);
+    if (timeStopTimer > 0) timeStopTimer = Math.max(0, timeStopTimer - dt);
+    if (rapidTimer > 0) rapidTimer = Math.max(0, rapidTimer - dt);
+
+    // Poison ticks enemies down until they dissolve.
+    for (const w of [...poisoned]) {
+      if (!words.includes(w)) { poisoned.splice(poisoned.indexOf(w), 1); continue; }
+      w.poisonTimer -= dt;
+      if (Math.random() < dt * 6) {
+        spawnParticles(w.x + w.width / 2, w.y, 1, ['#37ff8b'], { speed: 30, life: 0.5, size: 2 });
+      }
+      if (w.poisonTimer <= 0) {
+        poisoned.splice(poisoned.indexOf(w), 1);
+        destroyWord(w, '#37ff8b');
+      }
+    }
     if ((wasFrozen && freezeTimer === 0) || (wasSlow && slowTimer === 0) || (wasSurge && scoreSurgeTimer === 0)) {
       if (freezeTimer > 0) setTint('frost');
       else if (slowTimer > 0) setTint('warp');
@@ -1602,7 +2020,8 @@ function tick(now) {
     for (const slot of activeSkills) {
       if (slot.cooldownLeft > 0) {
         const before = slot.cooldownLeft;
-        slot.cooldownLeft = Math.max(0, slot.cooldownLeft - dt);
+        // Rapid Typing accelerates every cooldown while it lasts.
+        slot.cooldownLeft = Math.max(0, slot.cooldownLeft - dt * (rapidTimer > 0 ? 3 : 1));
         cooldownChanged = true;
         if (before > 0 && slot.cooldownLeft === 0) {
           pulseChip(skillSlotEls[activeSkills.indexOf(slot)], 'ready-flash');
@@ -1612,7 +2031,7 @@ function tick(now) {
     }
     if (cooldownChanged) updateSkillBarUI();
 
-    const speedMult = freezeTimer > 0 ? 0 : (slowTimer > 0 ? 0.5 : 1);
+    const speedMult = (freezeTimer > 0 || timeStopTimer > 0) ? 0 : (slowTimer > 0 ? 0.5 : 1);
 
     // Versus: advance bots, then apply whatever they did to us.
     if (vs) {
@@ -1661,6 +2080,26 @@ function tick(now) {
 
   render(now);
   requestAnimationFrame(tick);
+}
+
+// ---------- pause ----------
+
+function togglePause() {
+  if (pausedByMenu) resumeGame();
+  else openPauseMenu();
+}
+
+function openPauseMenu() {
+  if (state !== 'playing') return;
+  pausedByMenu = true;
+  paused = true;
+  showScreen('pause');
+}
+
+function resumeGame() {
+  pausedByMenu = false;
+  paused = false;
+  showScreen(null);
 }
 
 // ---------- versus setup UI ----------
@@ -1788,7 +2227,7 @@ function handleOnlineEvent(ev) {
       break;
     case 'start':
       showScreen(null);
-      startVersus(onlineFormat, versusDifficulty, true);
+      startVersus(onlineFormat, versusDifficulty, true, onlineRoom?.playerList || null);
       break;
     case 'incoming':
       processVersusEvents([{ type: 'incoming', from: { name: ev.from }, count: ev.count }]);
@@ -1812,7 +2251,7 @@ function handleOnlineEvent(ev) {
         words.splice(idx, 1);
         spawnExplosion(w.x + w.width / 2, w.y, '#ff8ad0');
       }
-      if (vs && ev.team) { damageTower(vs, enemyTeamOf(ev.team), TOWER_WORD_DAMAGE); updateTowerHud(); }
+      if (vs && ev.team) { damageTower(vs, enemyTeamOf(ev.team), ev.damage || 1); updateTowerHud(); }
       break;
     }
     case 'finished':
@@ -1871,6 +2310,41 @@ async function joinRoom() {
   }
 }
 
+// Quickplay: scan the public room directory, join the best open room, and
+// only create a fresh one if nothing suitable is out there.
+async function quickplay() {
+  setOnlineError('');
+  if (!supabaseReady) { setOnlineError('Multiplayer requires Supabase to be configured.'); return; }
+
+  searchCancelled = false;
+  searchStatus.textContent = 'looking for an open room...';
+  showScreen('searching');
+
+  try {
+    const code = await findOpenRoom(onlineFormat);
+    if (searchCancelled) return;
+
+    if (code) {
+      searchStatus.textContent = `found ${code} — joining...`;
+      roomCodeInput.value = code;
+      await joinRoom();
+    } else {
+      searchStatus.textContent = 'no rooms open — hosting one';
+      await createRoom();
+    }
+  } catch (err) {
+    if (searchCancelled) return;
+    setOnlineError(err.message || 'Matchmaking failed.');
+    showScreen('online');
+  }
+}
+
+function cancelSearch() {
+  searchCancelled = true;
+  showScreen('online');
+  setOnlineError('');
+}
+
 async function leaveRoom() {
   if (onlineRoom) { await onlineRoom.leave().catch(() => {}); onlineRoom = null; }
   showScreen('online');
@@ -1908,14 +2382,33 @@ document.addEventListener('click', (e) => {
   switch (action) {
     case 'show-modes': showScreen('mode'); break;
     case 'select-gameplay':
+      // Content is always word-based now; bosses still speak in phrases.
       gameplayMode = target.dataset.gameplay || 'adventure';
-      showScreen('text');
-      break;
-    case 'select-text':
-      textMode = target.dataset.text || 'words';
+      textMode = 'words';
       startGame();
       break;
     case 'back-to-menu': showScreen('menu'); break;
+    case 'resume': resumeGame(); break;
+    case 'show-instructions':
+      instructionsReturn = pausedByMenu ? 'pause' : 'menu';
+      showScreen('instructions');
+      break;
+    case 'close-instructions':
+      showScreen(instructionsReturn === 'pause' ? 'pause' : 'menu');
+      break;
+    case 'toggle-boards': toggleBoards(); break;
+    case 'pick-fill':
+      fillWithBots = target.dataset.fill === '1';
+      selectChip(target);
+      break;
+    case 'pick-lobby-fill':
+      fillWithBots = target.dataset.fill === '1';
+      selectChip(target);
+      break;
+    case 'quickplay': quickplay(); break;
+    case 'cancel-search': cancelSearch(); break;
+    case 'cycle-quality': cycleQuality(); break;
+    case 'toggle-fullscreen': toggleFullscreen(); break;
     case 'back-to-modes': showScreen('mode'); break;
     // Versus matches must rebuild their opponents, not just reset the board.
     case 'play-again':
@@ -2004,6 +2497,7 @@ document.addEventListener('keydown', (e) => {
 
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
+applyQuality();
 updateSettingsUI();
 updateVersusHints();
 setAuthMode('signin');
@@ -2031,6 +2525,11 @@ window.PK = {
   startBossFight,
   spawnBossVolley,
   startVersus,
+  runSkill: runActiveSkillEffect,
+  get themeName() { return currentTheme.name; },
+  setLevelTheme(lvl) { level = lvl; applyTheme(lvl); },
+  get poisonedCount() { return poisoned.length; },
+  get buffs() { return { doubleDamageTimer, comboFrenzyTimer, timeStopTimer, rapidTimer }; },
   setMode(g, t) { gameplayMode = g; textMode = t; },
   setCombo(c) { combo = c; },
   registerKill,

@@ -55,24 +55,24 @@
         <div class="mana-orb-fill" id="hud-mana-fill"></div>
         <span class="mana-orb-label" id="hud-mana-text">0</span>
       </div>
-      <span class="slot-key">C1</span>
+      <span class="slot-key">ENTER</span>
     </div>
     <div class="skill-slot empty" id="skill-slot-0" data-action="activate-skill" data-slot="0">
       <span class="skill-slot-icon" id="skill-slot-icon-0">&#9679;</span>
       <span class="skill-slot-name" id="skill-slot-name-0">&mdash;</span>
-      <span class="slot-key">C2</span>
+      <span class="slot-key">CTRL+1</span>
       <div class="skill-slot-cooldown" id="skill-cd-0"></div>
     </div>
     <div class="skill-slot empty" id="skill-slot-1" data-action="activate-skill" data-slot="1">
       <span class="skill-slot-icon" id="skill-slot-icon-1">&#9679;</span>
       <span class="skill-slot-name" id="skill-slot-name-1">&mdash;</span>
-      <span class="slot-key">C3</span>
+      <span class="slot-key">CTRL+2</span>
       <div class="skill-slot-cooldown" id="skill-cd-1"></div>
     </div>
     <div class="skill-slot empty" id="skill-slot-2" data-action="activate-skill" data-slot="2">
       <span class="skill-slot-icon" id="skill-slot-icon-2">&#9679;</span>
       <span class="skill-slot-name" id="skill-slot-name-2">&mdash;</span>
-      <span class="slot-key">C4</span>
+      <span class="slot-key">CTRL+3</span>
       <div class="skill-slot-cooldown" id="skill-cd-2"></div>
     </div>
   </div>
@@ -116,6 +116,7 @@
     </div>
     <p class="subtitle text-3d-cyan">slay the word horde</p>
     <button class="btn-3d primary" data-action="show-modes">Play</button>
+    <button class="btn-3d" data-action="show-instructions">How to Play</button>
     <button class="btn-3d" data-action="show-account" id="account-btn">Sign In</button>
     <button class="btn-3d" data-action="open-settings">Settings</button>
     <button class="btn-3d" data-action="show-leaderboard">Leaderboard</button>
@@ -172,13 +173,13 @@
       <p class="setup-hint" id="difficulty-hint">Adept &mdash; 40 WPM, 93% accuracy.</p>
     </div>
 
-    <div class="setup-group" id="content-group">
-      <span class="setup-label">Content</span>
+    <div class="setup-group">
+      <span class="setup-label">Fill Empty Slots</span>
       <div class="chip-row">
-        <button class="pick-chip selected" data-action="pick-content" data-text="words">Words</button>
-        <button class="pick-chip" data-action="pick-content" data-text="programming">Code</button>
-        <button class="pick-chip" data-action="pick-content" data-text="sentences">Sentences</button>
+        <button class="pick-chip selected" data-action="pick-fill" data-fill="1">With Bots</button>
+        <button class="pick-chip" data-action="pick-fill" data-fill="0">Humans Only</button>
       </div>
+      <p class="setup-hint">bots take any seat a player doesn't</p>
     </div>
 
     <button class="btn-3d primary" data-action="start-versus">Fight</button>
@@ -197,7 +198,8 @@
       </div>
     </div>
 
-    <button class="btn-3d primary" data-action="create-room">Create Room</button>
+    <button class="btn-3d primary" data-action="quickplay" id="quickplay-btn">Quickplay &mdash; Find a Match</button>
+    <button class="btn-3d" data-action="create-room">Create Room</button>
 
     <div class="join-row">
       <input id="room-code-input" class="pixel-input" maxlength="5" placeholder="CODE" autocomplete="off" spellcheck="false">
@@ -206,6 +208,13 @@
 
     <p class="setup-hint" id="online-error"></p>
     <button class="btn-3d" data-action="back-to-modes">Back</button>
+  </section>
+
+  <section id="screen-searching" class="screen hidden">
+    <h1 class="title text-3d-gold">SEARCHING</h1>
+    <p class="subtitle text-3d-cyan" id="search-status">looking for an open room...</p>
+    <div class="search-spinner"><span></span><span></span><span></span><span></span></div>
+    <button class="btn-3d" data-action="cancel-search">Cancel</button>
   </section>
 
   <section id="screen-lobby" class="screen hidden">
@@ -217,6 +226,10 @@
     </div>
     <ul class="lobby-list pixel-panel" id="lobby-players"></ul>
     <p class="setup-hint" id="lobby-hint">waiting for players...</p>
+    <div class="chip-row">
+      <button class="pick-chip selected" data-action="pick-lobby-fill" data-fill="1">Fill With Bots</button>
+      <button class="pick-chip" data-action="pick-lobby-fill" data-fill="0">Humans Only</button>
+    </div>
     <button class="btn-3d primary hidden" id="lobby-start-btn" data-action="start-online">Start Match</button>
     <button class="btn-3d" data-action="leave-room">Leave</button>
   </section>
@@ -248,23 +261,21 @@
     <button class="btn-3d primary" data-action="back-to-menu">Back</button>
   </section>
 
-  <section id="screen-text" class="screen hidden">
-    <h1 class="title text-3d-gold">CONTENT</h1>
-    <p class="subtitle text-3d-cyan">every run generates fresh text — nothing repeats</p>
-    <button class="btn-3d primary" data-action="select-text" data-text="words">Words</button>
-    <button class="btn-3d primary" data-action="select-text" data-text="programming">Programming</button>
-    <button class="btn-3d primary" data-action="select-text" data-text="sentences">Sentences</button>
-    <button class="btn-3d" data-action="back-to-modes">Back</button>
-  </section>
 
   <section id="screen-settings" class="screen hidden">
     <h1 class="title text-3d-gold">SETTINGS</h1>
     <div class="stats pixel-panel tilt-panel settings-panel">
-      <div class="stat-row"><span>Volume</span></div>
+      <div class="stat-row"><span>Master Volume</span><span id="volume-value">80%</span></div>
       <input type="range" id="volume-slider" class="volume-slider" min="0" max="100" value="80">
+      <div class="stat-row"><span>Music Volume</span><span id="music-volume-value">100%</span></div>
+      <input type="range" id="music-volume-slider" class="volume-slider" min="0" max="100" value="100">
+      <div class="stat-row"><span>Effects Volume</span><span id="sfx-volume-value">100%</span></div>
+      <input type="range" id="sfx-volume-slider" class="volume-slider" min="0" max="100" value="100">
       <div class="stat-row"><span>Sound Effects</span><button class="btn-3d toggle-btn" id="sfx-toggle-btn" data-action="toggle-sfx">ON</button></div>
       <div class="stat-row"><span>Music</span><button class="btn-3d toggle-btn" id="music-toggle-btn" data-action="toggle-music">ON</button></div>
       <div class="stat-row"><span>Screen Shake</span><button class="btn-3d toggle-btn" id="shake-toggle-btn" data-action="toggle-shake">ON</button></div>
+      <div class="stat-row"><span>Graphics</span><button class="btn-3d toggle-btn" id="quality-btn" data-action="cycle-quality">HIGH</button></div>
+      <div class="stat-row"><span>Fullscreen</span><button class="btn-3d toggle-btn" id="fullscreen-btn" data-action="toggle-fullscreen">OFF</button></div>
       <div class="stat-row"><span>Leaderboard</span><button class="btn-3d toggle-btn danger" id="clear-leaderboard-btn" data-action="clear-leaderboard">CLEAR</button></div>
     </div>
     <button class="btn-3d primary" data-action="close-settings">Back</button>
@@ -292,6 +303,62 @@
     </div>
   </section>
 
+  <section id="screen-pause" class="screen hidden">
+    <h1 class="title text-3d-gold">PAUSED</h1>
+    <p class="subtitle text-3d-cyan">press ESC to resume</p>
+    <button class="btn-3d primary" data-action="resume">Resume</button>
+    <button class="btn-3d" data-action="restart-run">Retry</button>
+    <button class="btn-3d" data-action="open-settings">Settings</button>
+    <button class="btn-3d" data-action="show-instructions">Instructions</button>
+    <button class="btn-3d" data-action="go-home">Exit to Menu</button>
+  </section>
+
+  <section id="screen-instructions" class="screen hidden">
+    <h1 class="title text-3d-gold">HOW TO PLAY</h1>
+    <div class="instructions-panel pixel-panel">
+      <div class="instr-block">
+        <span class="instr-head">The Basics</span>
+        <p>Monsters carry words down the screen. Type a word to slay it. If one crosses the red line at the bottom, it hits you.</p>
+        <p>Just start typing — the first letter locks onto a target automatically.</p>
+      </div>
+      <div class="instr-block">
+        <span class="instr-head">Controls</span>
+        <table class="key-table">
+          <tr><td><kbd>A-Z</kbd></td><td>Type the falling words</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Ultimate &mdash; clears every enemy (needs full mana)</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>1/2/3</kbd></td><td>Fire skill slots 1&ndash;3</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Pause menu</td></tr>
+        </table>
+        <p class="instr-note">Skills and the ultimate are also clickable if a shortcut is taken by your browser.</p>
+      </div>
+      <div class="instr-block">
+        <span class="instr-head">Combos &amp; Levels</span>
+        <p>Consecutive kills build a combo, multiplying score. A mistyped letter or a missed word breaks it.</p>
+        <p>Kills grant XP. Each level-up lets you draft a skill &mdash; three active slots, then permanent passives.</p>
+      </div>
+      <div class="instr-block">
+        <span class="instr-head">Adventure</span>
+        <p>Endless. Every level shifts to a new biome, and a boss guards every 5th level. Bosses hurl long phrases &mdash; typing them damages the boss.</p>
+      </div>
+      <div class="instr-block">
+        <span class="instr-head">Royal Rumble</span>
+        <p>Up to 6 fighters. Combos launch words at a random rival; whatever they fail to clear drains their health. Last one standing wins.</p>
+        <table class="key-table">
+          <tr><td>Combo 5</td><td>1 word sent</td></tr>
+          <tr><td>Combo 10</td><td>2 words</td></tr>
+          <tr><td>Combo 15</td><td>3 words</td></tr>
+          <tr><td>Combo 20+</td><td>4 words</td></tr>
+        </table>
+      </div>
+      <div class="instr-block">
+        <span class="instr-head">Tower 4v4</span>
+        <p>Both teams share one pool of words. Each word you clear deals 1 damage to the enemy tower (50 HP).</p>
+        <p>A word someone else is typing turns grey and shows their name &mdash; pick a different one. No ultimate here; skills only. Best of 3 rounds.</p>
+      </div>
+    </div>
+    <button class="btn-3d primary" data-action="close-instructions">Back</button>
+  </section>
+
   <section id="screen-result" class="screen hidden">
     <h1 class="title text-3d-gold" id="result-title">RESULT</h1>
     <div class="stats pixel-panel tilt-panel">
@@ -314,7 +381,10 @@
     <button class="btn-3d primary" data-action="close-leaderboard">Back</button>
   </section>
 
-  <div id="opponent-rail" class="hidden"></div>
+  <div id="opponent-rail" class="hidden">
+    <button class="rail-toggle" id="rail-toggle" data-action="toggle-boards">&#9660; HIDE</button>
+    <div id="opponent-cards"></div>
+  </div>
 
   <div id="tower-hud" class="hidden">
     <div class="tower-side" id="tower-side-A">

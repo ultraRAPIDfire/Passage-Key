@@ -8,6 +8,17 @@ export const HORIZON_RATIO = 0.34;
 
 let stars = [];
 
+// Active biome; drawSky/drawGrid recolour themselves from this.
+let theme = {
+  sky: ['#07021a', '#150637', '#2d0a52'],
+  ground: ['#1b0640', '#050112'],
+  grid: '150,80,255',
+  horizon: 'rgba(160,90,255,0.35)',
+};
+
+export function setTheme(t) { if (t) theme = t; }
+export function getTheme() { return theme; }
+
 export function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
@@ -42,11 +53,24 @@ export function drawSky(now) {
   const horizon = canvas.height * HORIZON_RATIO;
 
   const sky = ctx.createLinearGradient(0, 0, 0, horizon);
-  sky.addColorStop(0, '#07021a');
-  sky.addColorStop(0.6, '#150637');
-  sky.addColorStop(1, '#2d0a52');
+  sky.addColorStop(0, theme.sky[0]);
+  sky.addColorStop(0.6, theme.sky[1]);
+  sky.addColorStop(1, theme.sky[2]);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, canvas.width, horizon);
+
+  // Some biomes hang a moon over the horizon.
+  if (theme.moon) {
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.shadowColor = theme.moon;
+    ctx.shadowBlur = 40;
+    ctx.fillStyle = theme.moon;
+    ctx.beginPath();
+    ctx.arc(canvas.width * 0.78, horizon * 0.42, 38, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
   // slow drifting nebula blooms
   const t = now / 1000;
@@ -72,13 +96,27 @@ export function drawSky(now) {
   }
 
   const ground = ctx.createLinearGradient(0, horizon, 0, canvas.height);
-  ground.addColorStop(0, '#1b0640');
-  ground.addColorStop(1, '#050112');
+  ground.addColorStop(0, theme.ground[0]);
+  ground.addColorStop(1, theme.ground[1]);
   ctx.fillStyle = ground;
   ctx.fillRect(0, horizon, canvas.width, canvas.height - horizon);
 
-  ctx.fillStyle = 'rgba(160,90,255,0.35)';
+  ctx.fillStyle = theme.horizon;
   ctx.fillRect(0, horizon - 2, canvas.width, 2);
+
+  // Battlefield smoke columns rising along the horizon.
+  if (theme.smoke) {
+    ctx.save();
+    for (let i = 0; i < 5; i++) {
+      const x = canvas.width * (0.12 + i * 0.19) + Math.sin(t * 0.3 + i) * 14;
+      const g = ctx.createLinearGradient(0, horizon - 90, 0, horizon);
+      g.addColorStop(0, 'rgba(60,30,20,0)');
+      g.addColorStop(1, 'rgba(90,45,25,0.5)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x - 30, horizon - 90, 60, 90);
+    }
+    ctx.restore();
+  }
 }
 
 // Receding floor grid that scrolls toward the camera; this is what sells depth.
@@ -90,7 +128,7 @@ export function drawGrid(now) {
   ctx.save();
   ctx.lineWidth = 1;
 
-  ctx.strokeStyle = 'rgba(120,60,220,0.30)';
+  ctx.strokeStyle = `rgba(${theme.grid},0.30)`;
   for (let i = -14; i <= 14; i++) {
     const xBottom = vp + i * (canvas.width / 9);
     ctx.beginPath();
@@ -104,7 +142,7 @@ export function drawGrid(now) {
     const k = (i + scroll) / 18;
     const y = horizon + depth * k * k;
     const alpha = 0.06 + k * 0.34;
-    ctx.strokeStyle = `rgba(150,80,255,${alpha})`;
+    ctx.strokeStyle = `rgba(${theme.grid},${alpha})`;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);

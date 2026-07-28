@@ -17,8 +17,15 @@ const BOT_NAMES = [
   'Cinder', 'Wraith', 'Lark', 'Mote', 'Fen', 'Rook', 'Ash', 'Kite',
 ];
 
-export const TOWER_MAX_HP = 50;
-export const TOWER_WORD_DAMAGE = 5;
+export const TOWER_MAX_HP = 1000;
+
+// Damage scales with word length — one point per correctly typed letter —
+// then multiplies with combo and any active buffs. Long words are worth
+// committing to.
+export function damageForWord(text, { comboMult = 1, buffMult = 1, crit = false } = {}) {
+  const base = text.replace(/\s/g, '').length;
+  return Math.max(1, Math.round(base * comboMult * buffMult * (crit ? 2 : 1)));
+}
 export const RUMBLE_MAX_HP = 100;
 export const TOWER_ROUNDS = 3;
 
