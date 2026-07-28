@@ -24,10 +24,11 @@ export function generateRoomCode() {
 }
 
 export class OnlineRoom {
-  constructor({ code, name, format, onEvent }) {
+  constructor({ code, name, format, ranked = false, onEvent }) {
     this.code = code.toUpperCase();
     this.name = name;
-    this.format = format;          // 'rumble' | 'tower'
+    this.format = format;
+    this.ranked = ranked;
     this.onEvent = onEvent || (() => {});
     this.channel = null;
     this.directory = null;
@@ -170,10 +171,8 @@ export class OnlineRoom {
       await this.channel.untrack();
       await supabase.removeChannel(this.channel);
     } catch { /* channel already torn down */ }
-    if (this.directory) {
-      try { await supabase.removeChannel(this.directory); } catch { /* already gone */ }
-      this.directory = null;
-    }
+    if (this.isHost) await unadvertiseRoom();
+    this.directory = null;
     this.channel = null;
     this.players.clear();
   }
@@ -181,15 +180,18 @@ export class OnlineRoom {
   // Keep the public directory entry in step with the real roster.
   async publish() {
     if (!this.isHost) return;
-    if (!this.directory) {
-      this.directory = await advertiseRoom({
-        code: this.code, format: this.format, count: this.players.size || 1,
-      });
-    } else {
+    this.directory = await advertiseRoom({
+      code: this.code,
+      format: this.format,
+      count: this.players.size || 1,
+      ranked: this.ranked,
+      host: this.name,
+    });
+    // Closed rooms drop out of the browser once the match begins.
+    if (this.started && this.directory) {
       await this.directory.track({
-        code: this.code, format: this.format,
-        count: this.players.size || 1,
-        open: !this.started, at: Date.now(),
+        code: this.code, format: this.format, count: this.players.size || 1,
+        ranked: this.ranked, host: this.name, open: false, at: Date.now(),
       });
     }
   }
@@ -201,56 +203,95 @@ export class OnlineRoom {
 // one without any server-side matchmaking service.
 const DIRECTORY_CHANNEL = 'passagekey:lobby';
 
-export async function advertiseRoom({ code, format, count }) {
-  if (!isConfigured || !supabase) return null;
-  const ch = supabase.channel(DIRECTORY_CHANNEL, {
-    config: { presence: { key: code } },
+// Supabase reuses a channel instance per topic, and handlers cannot be added
+// after subscribe(). So the directory is a single shared channel that every
+// consumer (advertiser, browser, matchmaker) reads from.
+let dirChannel = null;
+let dirReady = null;
+const dirKey = `c-${generateRoomCode()}${generateRoomCode()}`;
+
+// Round trip to the realtime endpoint, captured once at subscribe time.
+let dirPing = 0;
+
+function ensureDirectory() {
+  if (dirReady) return dirReady;
+  if (!isConfigured || !supabase) return Promise.resolve(null);
+
+  dirChannel = supabase.channel(DIRECTORY_CHANNEL, {
+    config: { presence: { key: dirKey } },
   });
-  await new Promise((resolve) => {
-    ch.subscribe(async (status) => {
+  // A presence handler must exist before subscribing for state to arrive.
+  dirChannel.on('presence', { event: 'sync' }, () => {});
+
+  const t0 = performance.now();
+  dirReady = new Promise((resolve) => {
+    const done = setTimeout(() => resolve(dirChannel), 6000);
+    dirChannel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        await ch.track({ code, format, count, open: true, at: Date.now() });
-        resolve();
+        dirPing = Math.round(performance.now() - t0);
+        clearTimeout(done);
+        resolve(dirChannel);
       }
     });
   });
+  return dirReady;
+}
+
+export function directoryPing() { return dirPing; }
+
+function readRooms() {
+  if (!dirChannel) return [];
+  const state = dirChannel.presenceState();
+  const out = [];
+  for (const key of Object.keys(state)) {
+    const meta = state[key][0];
+    if (!meta || !meta.open || !meta.code) continue;
+    out.push(meta);
+  }
+  return out;
+}
+
+// Publish (or refresh) this client's room in the shared directory.
+export async function advertiseRoom({ code, format, count, ranked, host }) {
+  const ch = await ensureDirectory();
+  if (!ch) return null;
+  await ch.track({ code, format, count, ranked: !!ranked, host, open: true, at: Date.now() });
   return ch;
 }
 
-// Look through advertised rooms for an open one matching the format.
-export async function findOpenRoom(format, { timeout = 3500 } = {}) {
-  if (!isConfigured || !supabase) throw new Error('Online play requires Supabase to be configured.');
+export async function unadvertiseRoom() {
+  if (!dirChannel) return;
+  try { await dirChannel.untrack(); } catch { /* already gone */ }
+}
 
-  const ch = supabase.channel(DIRECTORY_CHANNEL, { config: { presence: { key: `seek-${generateRoomCode()}` } } });
+// Snapshot every advertised room for the lobby browser. Ping is the measured
+// round trip to the realtime endpoint rather than an invented number.
+export async function listOpenRooms({ settle = 900 } = {}) {
+  const ch = await ensureDirectory();
+  if (!ch) return [];
+  // Give presence a beat to sync; the settle wait is not part of the ping.
+  await new Promise(r => setTimeout(r, settle));
 
-  const found = await new Promise((resolve) => {
-    let settled = false;
-    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+  return readRooms()
+    .map(r => ({ ...r, ping: dirPing }))
+    .sort((a, b) => (b.count || 1) - (a.count || 1));
+}
 
-    ch.on('presence', { event: 'sync' }, () => {
-      const state = ch.presenceState();
-      const cap = format === 'tower' ? 8 : 6;
-      const candidates = [];
-      for (const key of Object.keys(state)) {
-        const meta = state[key][0];
-        if (!meta || !meta.open || meta.code === undefined) continue;
-        if (meta.format !== format) continue;
-        if ((meta.count || 1) >= cap) continue;
-        candidates.push(meta);
-      }
-      // Prefer the fullest room that still has space, so games start sooner.
-      candidates.sort((a, b) => (b.count || 1) - (a.count || 1));
-      if (candidates.length) finish(candidates[0].code);
-    });
+// Pick the fullest room that still has space and matches the queue.
+export async function findOpenRoom(format, { settle = 1200, ranked = null, capacity = 6 } = {}) {
+  const ch = await ensureDirectory();
+  if (!ch) throw new Error('Online play requires Supabase to be configured.');
+  await new Promise(r => setTimeout(r, settle));
 
-    ch.subscribe((status) => {
-      if (status !== 'SUBSCRIBED') return;
-      setTimeout(() => finish(null), timeout);
-    });
+  const candidates = readRooms().filter(m => {
+    if (m.format !== format) return false;
+    if (ranked !== null && !!m.ranked !== !!ranked) return false;
+    if ((m.count || 1) >= capacity) return false;
+    return m.code !== undefined;
   });
 
-  try { await supabase.removeChannel(ch); } catch { /* already gone */ }
-  return found;
+  candidates.sort((a, b) => (b.count || 1) - (a.count || 1));
+  return candidates.length ? candidates[0].code : null;
 }
 
 // Deterministic PRNG so all clients in a tower match see identical words.

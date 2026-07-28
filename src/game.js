@@ -23,11 +23,14 @@ import {
   AI_PROFILES, createRumble, tickVersus, playerAttack, damagePlayer,
   attackForCombo, damageForWord, RUMBLE_MAX_HP,
 } from './versus.js';
-import { OnlineRoom, generateRoomCode, findOpenRoom } from './online.js';
+import { OnlineRoom, generateRoomCode, findOpenRoom, listOpenRooms } from './online.js';
 import {
   isConfigured as supabaseReady, signIn, signUp, signOut,
-  getSession, getProfile, submitScore, onAuthChange,
+  getSession, getProfile, updateProfile, submitScore, onAuthChange,
+  requestPasswordReset, changePassword, changeUsername,
+  recordMatch, fetchMatchHistory,
 } from './supabase.js';
+import { rankFor, nextRank, rankProgress, computeRpChange, winRate } from './ranking.js';
 
 const MODE_FONT_SIZE = { words: 18, programming: 15, sentences: 13 };
 // Sidebar reserves this much of the right gutter during versus matches.
@@ -192,6 +195,21 @@ const authError = $('auth-error');
 const authSubmit = $('auth-submit');
 const authToggle = $('auth-toggle');
 const profileName = $('profile-name');
+const profileRank = $('profile-rank');
+const profileRankBar = $('profile-rank-bar');
+const profileRp = $('profile-rp');
+const profileNextRank = $('profile-next-rank');
+const profileGames = $('profile-games');
+const profileWinrate = $('profile-winrate');
+const profileCombo = $('profile-combo');
+const profileAvatar = $('profile-avatar');
+const profileMsg = $('profile-msg');
+const matchList = $('match-list');
+const authRemember = $('auth-remember');
+const authRememberRow = $('auth-remember-row');
+const authForgot = $('auth-forgot');
+const queueHint = $('queue-hint');
+const roomList = $('room-list');
 const profileBest = $('profile-best');
 const profileRuns = $('profile-runs');
 const profileWpm = $('profile-wpm');
@@ -263,6 +281,10 @@ let pausedByMenu = false;
 let boardsMinimized = false;
 let instructionsReturn = 'menu';
 let fillWithBots = true;
+let queueMode = 'normal';
+let roomFilter = 'all';
+let browserRooms = [];
+let avatarIndex = 0;
 let searchCancelled = false;
 let pendingLoadout = null;
 let rollTimers = [];
@@ -1675,11 +1697,33 @@ function endVersus(winner) {
 
   const entry = {
     score, level, accuracy, wpm, bestCombo: maxCombo,
-    mode: `${versusFormat}/${textMode}`, bosses: 0,
+    mode: versusFormat, bosses: 0,
     date: new Date().toISOString(),
   };
   saveScore(entry);
   submitScore(entry).catch(() => {});
+
+  // Ranked matches move RP; casual ones only add to history.
+  const fieldSize = vs ? vs.opponents.length : 1;
+  const placement = playerWon ? 1 : (playerPlacement || fieldSize);
+  const survivedSec = Math.round(typingMs / 1000);
+  const ranked = isOnlineMatch && queueMode === 'ranked';
+  const currentRp = currentProfile?.rank_points || 0;
+  const { delta } = ranked
+    ? computeRpChange({ placement, fieldSize, wpm, accuracy, survivedSec, currentRp })
+    : { delta: 0 };
+
+  if (ranked) {
+    resultTitle.textContent += `  ${delta >= 0 ? '+' : ''}${delta} RP`;
+  }
+
+  recordMatch({
+    mode: versusFormat, ranked, placement, fieldSize,
+    score, wpm, accuracy, bestCombo: maxCombo, level, bosses: 0,
+    rpChange: delta, durationSec: survivedSec,
+  }).then(res => {
+    if (res && currentProfile) currentProfile.rank_points = res.rp_after;
+  }).catch(() => {});
 
   vs = null;
   if (onlineRoom) { onlineRoom.leave().catch(() => {}); onlineRoom = null; }
@@ -2255,6 +2299,17 @@ function updateVersusHints() {
 
 // ---------- auth ----------
 
+async function handleForgotPassword() {
+  const email = authEmail.value.trim();
+  if (!email) { authError.textContent = 'Enter your email first, then tap again.'; return; }
+  try {
+    await requestPasswordReset(email);
+    authError.textContent = 'Reset link sent — check your inbox.';
+  } catch (err) {
+    authError.textContent = err.message;
+  }
+}
+
 function setAuthMode(mode) {
   authMode = mode;
   const signup = mode === 'signup';
@@ -2263,6 +2318,8 @@ function setAuthMode(mode) {
     ? 'claim a name for the global board'
     : 'save your scores to the global board';
   authUsername.classList.toggle('hidden', !signup);
+  authRememberRow.classList.toggle('hidden', signup);
+  authForgot.classList.toggle('hidden', signup);
   authSubmit.textContent = signup ? 'Create Account' : 'Sign In';
   authToggle.textContent = signup ? 'I already have an account' : 'Create an account';
   authError.textContent = '';
@@ -2282,6 +2339,9 @@ async function handleAuthSubmit() {
     authError.textContent = 'Username must be at least 3 characters.';
     return;
   }
+
+  // "Remember me" off means the session should not outlive the tab.
+  try { localStorage.setItem('passageKeyRemember', authRemember.checked ? '1' : '0'); } catch {}
 
   authSubmit.disabled = true;
   authSubmit.textContent = 'Please wait...';
@@ -2309,6 +2369,16 @@ async function refreshSession() {
   accountBtn.textContent = currentSession ? (name ? name.toUpperCase() : 'PROFILE') : 'Sign In';
 }
 
+// Online play needs an identity to attach rank and history to. Solo modes stay
+// open so the game remains playable without an account.
+function requireAccount() {
+  if (currentSession) return true;
+  setAuthMode('signin');
+  authError.textContent = 'Sign in to play online — rank and history need an account.';
+  showScreen('auth');
+  return false;
+}
+
 function showAccount() {
   if (!supabaseReady) {
     showScreen('auth');
@@ -2324,18 +2394,156 @@ function showAccount() {
   }
 }
 
+const AVATARS = ['👾', '🤖', '🐉', '💀', '👻', '🦊', '🐺', '🦅', '⚔️', '🔮'];
+
 function renderProfile() {
   const local = loadLeaderboard();
-  profileName.textContent = currentProfile?.username || 'Player';
+  const p = currentProfile || {};
+  const rp = p.rank_points || 0;
+  const rank = rankFor(rp);
+  const next = nextRank(rp);
+
+  profileName.textContent = p.username || 'Player';
+  profileRank.textContent = rank.name;
+  profileRank.style.color = rank.color;
+  profileRankBar.style.width = `${rankProgress(rp) * 100}%`;
+  profileRp.textContent = `${rp} RP`;
+  profileNextRank.textContent = next ? `${next.min - rp} RP to ${next.name}` : 'Peak rank reached';
+
+  const games = p.games_played || 0;
+  profileGames.textContent = games;
+  profileWinrate.textContent = `${winRate(p.wins || 0, games)}%`;
+  profileWpm.textContent = p.best_wpm || 0;
+  profileCombo.textContent = p.best_combo || 0;
+  profileBosses.textContent = p.bosses_slain || 0;
   profileBest.textContent = local.length ? Math.max(...local.map(e => e.score)) : 0;
-  profileRuns.textContent = local.length;
-  profileWpm.textContent = local.length ? Math.max(...local.map(e => e.wpm || 0)) : 0;
-  profileBosses.textContent = local.reduce((s, e) => s + (e.bosses || 0), 0);
+
+  avatarIndex = p.avatar_id || 0;
+  profileAvatar.textContent = AVATARS[avatarIndex % AVATARS.length];
+  profileMsg.textContent = '';
+
+  renderMatchHistory();
+}
+
+async function renderMatchHistory() {
+  if (!currentSession) { matchList.innerHTML = '<li class="match-empty">sign in to track matches</li>'; return; }
+  matchList.innerHTML = '<li class="match-empty">loading...</li>';
+
+  const rows = await fetchMatchHistory(currentSession.user.id, 15);
+  matchList.innerHTML = '';
+  if (!rows.length) {
+    matchList.innerHTML = '<li class="match-empty">no matches yet — go play one</li>';
+    return;
+  }
+
+  for (const m of rows) {
+    const li = document.createElement('li');
+    if (m.placement != null) li.className = m.placement === 1 ? 'win' : 'loss';
+    const place = m.placement != null ? `#${m.placement}` : `Lv${m.level_reached}`;
+    const rpTxt = m.ranked
+      ? `<span class="match-rp ${m.rp_change >= 0 ? 'up' : 'down'}">${m.rp_change >= 0 ? '+' : ''}${m.rp_change} RP</span>`
+      : '<span class="match-meta">casual</span>';
+    li.innerHTML = `
+      <span class="room-name">${escapeHtml(String(m.mode).toUpperCase())} ${place}</span>
+      <span class="match-meta">${m.wpm} wpm &middot; ${m.accuracy}%</span>
+      ${rpTxt}`;
+    matchList.appendChild(li);
+  }
+}
+
+function cycleAvatar() {
+  avatarIndex = (avatarIndex + 1) % AVATARS.length;
+  profileAvatar.textContent = AVATARS[avatarIndex];
+  if (!currentSession) return;
+  updateProfile(currentSession.user.id, { avatar_id: avatarIndex })
+    .then(p => { currentProfile = p; })
+    .catch(() => { profileMsg.textContent = 'Could not save avatar.'; });
+}
+
+async function editUsername() {
+  const name = prompt('New username (3-16 characters):', currentProfile?.username || '');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (trimmed.length < 3 || trimmed.length > 16) {
+    profileMsg.textContent = 'Username must be 3-16 characters.';
+    return;
+  }
+  try {
+    currentProfile = await changeUsername(currentSession.user.id, trimmed);
+    profileMsg.textContent = 'Username updated.';
+    renderProfile();
+    refreshSession();
+  } catch (err) {
+    profileMsg.textContent = err.message;
+  }
+}
+
+async function editPassword() {
+  const pw = prompt('New password (at least 6 characters):');
+  if (pw === null) return;
+  if (pw.length < 6) { profileMsg.textContent = 'Password must be at least 6 characters.'; return; }
+  try {
+    await changePassword(pw);
+    profileMsg.textContent = 'Password updated.';
+  } catch (err) {
+    profileMsg.textContent = err.message;
+  }
 }
 
 // ---------- online ----------
 
 function setOnlineError(msg) { onlineError.textContent = msg || ''; }
+
+function updateQueueHint() {
+  queueHint.textContent = queueMode === 'ranked'
+    ? 'Ranked. Placement and typing performance move your RP.'
+    : 'Casual. Nothing at stake — rank is untouched.';
+}
+
+function pingClass(ms) {
+  if (ms < 80) return '';
+  return ms < 160 ? 'mid' : 'high';
+}
+
+async function refreshRoomBrowser() {
+  if (!supabaseReady) {
+    roomList.innerHTML = '<li class="room-empty">multiplayer is not configured</li>';
+    return;
+  }
+  roomList.innerHTML = '<li class="room-empty">searching for rooms...</li>';
+  browserRooms = await listOpenRooms();
+  renderRoomBrowser();
+}
+
+function renderRoomBrowser() {
+  const rooms = browserRooms.filter(r => {
+    if (roomFilter === 'ranked') return r.ranked;
+    if (roomFilter === 'normal') return !r.ranked;
+    return true;
+  });
+
+  roomList.innerHTML = '';
+  if (!rooms.length) {
+    roomList.innerHTML = '<li class="room-empty">no open rooms — create one or hit Quickplay</li>';
+    return;
+  }
+
+  for (const r of rooms) {
+    const full = (r.count || 1) >= 6;
+    const li = document.createElement('li');
+    li.className = full ? 'full' : '';
+    if (!full) {
+      li.dataset.action = 'join-listed';
+      li.dataset.code = r.code;
+    }
+    li.innerHTML = `
+      <span class="room-name">${escapeHtml(r.host || 'Room')}</span>
+      <span class="room-tag ${r.ranked ? 'ranked' : 'normal'}">${r.ranked ? 'RANKED' : 'NORMAL'}</span>
+      <span class="room-count">${r.count || 1}/6</span>
+      <span class="room-ping ${pingClass(r.ping || 0)}">${r.ping || 0}ms</span>`;
+    roomList.appendChild(li);
+  }
+}
 
 function renderLobby() {
   if (!onlineRoom) return;
@@ -2402,6 +2610,7 @@ async function createRoom() {
     code,
     name: currentProfile?.username || `Guest${Math.floor(Math.random() * 900 + 100)}`,
     format: onlineFormat,
+    ranked: queueMode === 'ranked',
     onEvent: handleOnlineEvent,
   });
   try {
@@ -2428,6 +2637,7 @@ async function joinRoom() {
     code,
     name: currentProfile?.username || `Guest${Math.floor(Math.random() * 900 + 100)}`,
     format: onlineFormat,
+    ranked: queueMode === 'ranked',
     onEvent: handleOnlineEvent,
   });
   try {
@@ -2455,7 +2665,7 @@ async function quickplay() {
   showScreen('searching');
 
   try {
-    const code = await findOpenRoom(onlineFormat);
+    const code = await findOpenRoom(onlineFormat, { ranked: queueMode === 'ranked' });
     if (searchCancelled) return;
 
     if (code) {
@@ -2540,6 +2750,26 @@ document.addEventListener('click', (e) => {
       selectChip(target);
       break;
     case 'roll-continue': applyRolledLoadout(); break;
+    case 'pick-queue':
+      queueMode = target.dataset.queue;
+      selectChip(target);
+      updateQueueHint();
+      refreshRoomBrowser();
+      break;
+    case 'filter-rooms':
+      roomFilter = target.dataset.filter;
+      selectChip(target);
+      renderRoomBrowser();
+      break;
+    case 'refresh-rooms': refreshRoomBrowser(); break;
+    case 'join-listed':
+      roomCodeInput.value = target.dataset.code;
+      joinRoom();
+      break;
+    case 'auth-forgot': handleForgotPassword(); break;
+    case 'cycle-avatar': cycleAvatar(); break;
+    case 'edit-username': editUsername(); break;
+    case 'edit-password': editPassword(); break;
     case 'quickplay': quickplay(); break;
     case 'cancel-search': cancelSearch(); break;
     case 'cycle-quality': cycleQuality(); break;
@@ -2600,8 +2830,11 @@ document.addEventListener('click', (e) => {
 
     // online
     case 'show-online':
+      if (!requireAccount()) break;
       setOnlineError(supabaseReady ? '' : 'Multiplayer requires Supabase to be configured.');
+      updateQueueHint();
       showScreen('online');
+      refreshRoomBrowser();
       break;
     case 'pick-online-format':
       onlineFormat = target.dataset.format;

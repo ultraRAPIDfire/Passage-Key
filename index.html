@@ -190,18 +190,37 @@
     <p class="subtitle text-3d-cyan" id="online-status">connect to play with friends</p>
 
     <div class="setup-group">
-      <span class="setup-label">Format</span>
+      <span class="setup-label">Queue</span>
       <div class="chip-row">
-        <button class="pick-chip selected" data-action="pick-online-format" data-format="rumble">Royal Rumble</button>
+        <button class="pick-chip selected" data-action="pick-queue" data-queue="normal">Normal</button>
+        <button class="pick-chip" data-action="pick-queue" data-queue="ranked">Ranked</button>
       </div>
+      <p class="setup-hint" id="queue-hint">Casual. Nothing at stake &mdash; rank is untouched.</p>
     </div>
 
-    <button class="btn-3d primary" data-action="quickplay" id="quickplay-btn">Quickplay &mdash; Find a Match</button>
-    <button class="btn-3d" data-action="create-room">Create Room</button>
+    <div class="online-actions">
+      <button class="btn-3d primary" data-action="quickplay" id="quickplay-btn">Quickplay</button>
+      <button class="btn-3d" data-action="create-room">Create Room</button>
+    </div>
+
+    <div class="lobby-browser pixel-panel">
+      <div class="browser-head">
+        <span class="instr-head">Open Rooms</span>
+        <div class="chip-row">
+          <button class="pick-chip tiny selected" data-action="filter-rooms" data-filter="all">All</button>
+          <button class="pick-chip tiny" data-action="filter-rooms" data-filter="ranked">Ranked</button>
+          <button class="pick-chip tiny" data-action="filter-rooms" data-filter="normal">Normal</button>
+          <button class="pick-chip tiny" data-action="refresh-rooms">&#8635;</button>
+        </div>
+      </div>
+      <ul class="room-list" id="room-list">
+        <li class="room-empty">searching for rooms...</li>
+      </ul>
+    </div>
 
     <div class="join-row">
       <input id="room-code-input" class="pixel-input" maxlength="5" placeholder="CODE" autocomplete="off" spellcheck="false">
-      <button class="btn-3d join-btn" data-action="join-room">Join</button>
+      <button class="btn-3d join-btn" data-action="join-room">Join by Code</button>
     </div>
 
     <p class="setup-hint" id="online-error"></p>
@@ -239,23 +258,58 @@
       <input id="auth-username" class="pixel-input full hidden" placeholder="USERNAME" autocomplete="username" maxlength="16" spellcheck="false">
       <input id="auth-email" class="pixel-input full" type="email" placeholder="EMAIL" autocomplete="email" spellcheck="false">
       <input id="auth-password" class="pixel-input full" type="password" placeholder="PASSWORD" autocomplete="current-password">
+      <label class="auth-check" id="auth-remember-row">
+        <input type="checkbox" id="auth-remember" checked>
+        <span>Remember me</span>
+      </label>
       <p class="auth-error" id="auth-error"></p>
       <button class="btn-3d primary" id="auth-submit" data-action="auth-submit">Sign In</button>
       <button class="btn-3d" data-action="auth-toggle" id="auth-toggle">Create an account</button>
+      <button class="btn-3d link-btn" data-action="auth-forgot" id="auth-forgot">Forgot password?</button>
     </div>
-    <button class="btn-3d" data-action="back-to-menu">Back</button>
   </section>
 
   <section id="screen-profile" class="screen hidden">
     <h1 class="title text-3d-gold">PROFILE</h1>
-    <div class="stats pixel-panel tilt-panel">
-      <div class="stat-row"><span>Player</span><span id="profile-name">-</span></div>
-      <div class="stat-row"><span>Best Score</span><span id="profile-best">0</span></div>
-      <div class="stat-row"><span>Runs Played</span><span id="profile-runs">0</span></div>
-      <div class="stat-row"><span>Best WPM</span><span id="profile-wpm">0</span></div>
-      <div class="stat-row"><span>Bosses Slain</span><span id="profile-bosses">0</span></div>
+
+    <div class="profile-grid">
+      <div class="profile-card pixel-panel">
+        <div class="profile-id">
+          <div class="avatar" id="profile-avatar" data-action="cycle-avatar" title="Click to change">&#128126;</div>
+          <div class="profile-id-text">
+            <span class="profile-name" id="profile-name">-</span>
+            <span class="profile-rank" id="profile-rank">Bronze I</span>
+          </div>
+        </div>
+        <div class="rank-bar-outer">
+          <div class="rank-bar-fill" id="profile-rank-bar"></div>
+          <span class="bar-text" id="profile-rp">0 RP</span>
+        </div>
+        <p class="setup-hint" id="profile-next-rank">&nbsp;</p>
+
+        <div class="profile-stat-grid">
+          <div class="pstat"><span id="profile-games">0</span><em>Games</em></div>
+          <div class="pstat"><span id="profile-winrate">0%</span><em>Win Rate</em></div>
+          <div class="pstat"><span id="profile-wpm">0</span><em>Best WPM</em></div>
+          <div class="pstat"><span id="profile-combo">0</span><em>Best Combo</em></div>
+          <div class="pstat"><span id="profile-bosses">0</span><em>Bosses</em></div>
+          <div class="pstat"><span id="profile-best">0</span><em>Best Score</em></div>
+        </div>
+
+        <div class="profile-actions">
+          <button class="btn-3d toggle-btn" data-action="edit-username">Username</button>
+          <button class="btn-3d toggle-btn" data-action="edit-password">Password</button>
+          <button class="btn-3d toggle-btn danger" data-action="sign-out">Sign Out</button>
+        </div>
+        <p class="auth-error" id="profile-msg"></p>
+      </div>
+
+      <div class="profile-card pixel-panel">
+        <span class="instr-head">Match History</span>
+        <ul class="match-list" id="match-list"></ul>
+      </div>
     </div>
-    <button class="btn-3d" data-action="sign-out">Sign Out</button>
+
     <button class="btn-3d primary" data-action="back-to-menu">Back</button>
   </section>
 
