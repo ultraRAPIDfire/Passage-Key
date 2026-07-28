@@ -138,12 +138,12 @@
       <button class="mode-card" data-action="show-versus-setup" data-online="0">
         <span class="mode-card-icon">&#129302;</span>
         <span class="mode-card-name">Versus AI</span>
-        <span class="mode-card-desc">Royal Rumble or Tower 4v4 against bots. Four difficulty tiers.</span>
+        <span class="mode-card-desc">Royal Rumble against bots. Four difficulty tiers.</span>
       </button>
       <button class="mode-card" data-action="show-online">
         <span class="mode-card-icon">&#127760;</span>
         <span class="mode-card-name">Multiplayer</span>
-        <span class="mode-card-desc">Royal Rumble (6p) &amp; Tower 4v4 online with friends.</span>
+        <span class="mode-card-desc">Royal Rumble up to 6 players, ranked or casual.</span>
       </button>
     </div>
     <button class="btn-3d" data-action="back-to-menu">Back</button>
@@ -157,7 +157,6 @@
       <span class="setup-label">Format</span>
       <div class="chip-row" id="format-row">
         <button class="pick-chip selected" data-action="pick-format" data-format="rumble">Royal Rumble</button>
-        <button class="pick-chip" data-action="pick-format" data-format="tower">Tower 4v4</button>
       </div>
       <p class="setup-hint" id="format-hint">Up to 6 fighters. Last one standing wins.</p>
     </div>
@@ -194,7 +193,6 @@
       <span class="setup-label">Format</span>
       <div class="chip-row">
         <button class="pick-chip selected" data-action="pick-online-format" data-format="rumble">Royal Rumble</button>
-        <button class="pick-chip" data-action="pick-online-format" data-format="tower">Tower 4v4</button>
       </div>
     </div>
 
@@ -303,6 +301,26 @@
     </div>
   </section>
 
+  <section id="screen-roll" class="screen hidden">
+    <h1 class="title text-3d-gold">LOADOUT ROLL</h1>
+    <p class="subtitle text-3d-cyan" id="roll-subtitle">the arena decides your kit</p>
+    <div class="roll-row">
+      <div class="roll-reel" id="roll-reel-0"><span class="roll-icon">?</span><span class="roll-name">&mdash;</span></div>
+      <div class="roll-reel" id="roll-reel-1"><span class="roll-icon">?</span><span class="roll-name">&mdash;</span></div>
+      <div class="roll-reel" id="roll-reel-2"><span class="roll-icon">?</span><span class="roll-name">&mdash;</span></div>
+    </div>
+    <div class="roll-passive" id="roll-passive">
+      <span class="roll-passive-label">PASSIVE</span>
+      <span class="roll-passive-name" id="roll-passive-name">&mdash;</span>
+    </div>
+    <button class="btn-3d primary hidden" id="roll-continue" data-action="roll-continue">Fight</button>
+  </section>
+
+  <section id="screen-countdown" class="screen hidden countdown-screen">
+    <p class="countdown-label" id="countdown-label">MATCH STARTING</p>
+    <div class="countdown-number" id="countdown-number">5</div>
+  </section>
+
   <section id="screen-pause" class="screen hidden">
     <h1 class="title text-3d-gold">PAUSED</h1>
     <p class="subtitle text-3d-cyan">press ESC to resume</p>
@@ -350,11 +368,6 @@
           <tr><td>Combo 20+</td><td>4 words</td></tr>
         </table>
       </div>
-      <div class="instr-block">
-        <span class="instr-head">Tower 4v4</span>
-        <p>Both teams share one pool of words. Each word you clear deals 1 damage to the enemy tower (50 HP).</p>
-        <p>A word someone else is typing turns grey and shows their name &mdash; pick a different one. No ultimate here; skills only. Best of 3 rounds.</p>
-      </div>
     </div>
     <button class="btn-3d primary" data-action="close-instructions">Back</button>
   </section>
@@ -386,23 +399,6 @@
     <div id="opponent-cards"></div>
   </div>
 
-  <div id="tower-hud" class="hidden">
-    <div class="tower-side" id="tower-side-A">
-      <span class="tower-tag team-a">TEAM A</span>
-      <div class="tower-bar-outer">
-        <div class="tower-bar-fill team-a-fill" id="tower-fill-A"></div>
-        <span class="tower-bar-text" id="tower-text-A">50 / 50</span>
-      </div>
-    </div>
-    <div class="tower-round" id="tower-round">ROUND 1</div>
-    <div class="tower-side" id="tower-side-B">
-      <span class="tower-tag team-b">TEAM B</span>
-      <div class="tower-bar-outer">
-        <div class="tower-bar-fill team-b-fill" id="tower-fill-B"></div>
-        <span class="tower-bar-text" id="tower-text-B">50 / 50</span>
-      </div>
-    </div>
-  </div>
 
   <div id="vignette"></div>
   <div id="scanlines"></div>

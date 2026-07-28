@@ -1,5 +1,4 @@
-// Versus engine: AI opponents, the attack/garbage economy, and the two
-// competitive formats (Royal Rumble and Tower 4v4).
+// Versus engine: AI opponents and the attack/garbage economy for Royal Rumble.
 //
 // The same engine backs both offline bot matches and online play — an online
 // opponent is simply one whose progress is driven by network events instead of
@@ -17,8 +16,6 @@ const BOT_NAMES = [
   'Cinder', 'Wraith', 'Lark', 'Mote', 'Fen', 'Rook', 'Ash', 'Kite',
 ];
 
-export const TOWER_MAX_HP = 1000;
-
 // Damage scales with word length — one point per correctly typed letter —
 // then multiplies with combo and any active buffs. Long words are worth
 // committing to.
@@ -27,7 +24,6 @@ export function damageForWord(text, { comboMult = 1, buffMult = 1, crit = false 
   return Math.max(1, Math.round(base * comboMult * buffMult * (crit ? 2 : 1)));
 }
 export const RUMBLE_MAX_HP = 100;
-export const TOWER_ROUNDS = 3;
 
 // Tetris-style: bigger combos send bigger volleys.
 export function attackForCombo(combo) {
@@ -68,8 +64,7 @@ export function createOpponent({ name, difficulty = 'normal', isAI = true, team 
     wordsCleared: 0,
     // Rumble: queued garbage the bot must chew through before it is safe again.
     pressure: 0,
-    // Tower: the word this bot has claimed and its typing progress in chars.
-    target: null,
+      target: null,
     progress: 0,
     thinkTimer: 0,
     lastAction: '',
@@ -193,106 +188,6 @@ export function damagePlayer(vs, amount) {
   }
 }
 
-// -------------------------------------------------------------------- Tower 4v4
-
-export function createTower({ difficulty = 'normal', playerName = 'You' }) {
-  const names = shuffled(BOT_NAMES);
-  const player = createOpponent({ name: playerName, difficulty, isAI: false, isHuman: true, team: 'A' });
-  const allies = names.slice(0, 3).map(n => createOpponent({ name: n, difficulty, team: 'A' }));
-  const enemies = names.slice(3, 7).map(n => createOpponent({ name: n, difficulty, team: 'B' }));
-
-  return {
-    format: 'tower',
-    difficulty,
-    player,
-    opponents: [player, ...allies, ...enemies],
-    towers: { A: TOWER_MAX_HP, B: TOWER_MAX_HP },
-    round: 1,
-    roundWins: { A: 0, B: 0 },
-    finished: false,
-    winner: null,
-    events: [],
-  };
-}
-
-export function enemyTeamOf(team) { return team === 'A' ? 'B' : 'A'; }
-
-// Bots claim from the shared word pool via callbacks supplied by the caller,
-// so the pool stays owned by the game loop rather than duplicated here.
-export function tickTowerBot(vs, op, dt, api) {
-  if (vs.finished || !op.alive) return;
-  if (op.flash > 0) op.flash = Math.max(0, op.flash - dt);
-
-  if (!op.target) {
-    op.thinkTimer -= dt;
-    if (op.thinkTimer <= 0) {
-      const claimed = api.claimWord(op);
-      if (claimed) {
-        op.target = claimed;
-        op.progress = 0;
-      } else {
-        op.thinkTimer = 0.25;
-      }
-    }
-    return;
-  }
-
-  // The word may have been completed or removed by someone else.
-  if (!api.isWordValid(op.target)) {
-    op.target = null;
-    op.progress = 0;
-    return;
-  }
-
-  op.progress += charsPerSecond(op) * dt;
-
-  if (op.progress >= op.target.text.length) {
-    const word = op.target;
-    op.target = null;
-    op.progress = 0;
-    op.thinkTimer = rand(op.profile.reaction[0], op.profile.reaction[1]);
-
-    if (Math.random() > op.profile.accuracy) {
-      // Fumbled: release the claim so someone else can take it.
-      op.combo = 0;
-      op.lastAction = 'miss';
-      api.releaseWord(word, op);
-      return;
-    }
-
-    op.combo += 1;
-    op.wordsCleared += 1;
-    op.flash = 0.25;
-    op.lastAction = 'clear';
-    api.completeWord(word, op);
-  }
-}
-
-export function damageTower(vs, team, amount) {
-  vs.towers[team] = Math.max(0, vs.towers[team] - amount);
-  vs.events.push({ type: 'tower-damage', team, amount, remaining: vs.towers[team] });
-  if (vs.towers[team] === 0) endRound(vs, enemyTeamOf(team));
-}
-
-function endRound(vs, winningTeam) {
-  vs.roundWins[winningTeam] += 1;
-  vs.events.push({ type: 'round-end', winner: winningTeam, round: vs.round });
-
-  const needed = Math.ceil(TOWER_ROUNDS / 2);
-  if (vs.roundWins[winningTeam] >= needed || vs.round >= TOWER_ROUNDS) {
-    vs.finished = true;
-    vs.winner = vs.roundWins.A === vs.roundWins.B
-      ? null
-      : (vs.roundWins.A > vs.roundWins.B ? 'A' : 'B');
-    vs.events.push({ type: 'finished', winner: vs.winner });
-  } else {
-    vs.round += 1;
-    vs.towers.A = TOWER_MAX_HP;
-    vs.towers.B = TOWER_MAX_HP;
-    vs.events.push({ type: 'round-start', round: vs.round });
-  }
-}
-
 // ------------------------------------------------------------------- shared tick
 
 export function tickVersus(vs, dt, api = {}) {
@@ -302,8 +197,7 @@ export function tickVersus(vs, dt, api = {}) {
     if (op.flash > 0) op.flash = Math.max(0, op.flash - dt);
     if (!op.isAI) continue;
 
-    if (vs.format === 'rumble') tickRumbleBot(vs, op, dt);
-    else tickTowerBot(vs, op, dt, api);
+    tickRumbleBot(vs, op, dt);
   }
 
   return drainEvents(vs);
@@ -315,9 +209,6 @@ function drainEvents(vs) {
   return out;
 }
 
-export function teamOf(vs, team) {
-  return vs.opponents.filter(o => o.team === team);
-}
 
 export function aliveCount(vs) {
   return vs.opponents.filter(o => o.alive).length;

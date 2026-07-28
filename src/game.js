@@ -15,14 +15,13 @@ import {
   resizeCanvas, updateStars, drawSky, drawGrid, drawChip, drawText3D,
   drawMonster, drawPlayer, setTheme,
 } from './sprites.js';
+import { createSnake, updateSnake, drawSnake, severSegment, aliveSegments, SNAKE_INTERVAL } from './snake.js';
 import { themeForLevel, updateWeather, drawWeather, drawLightning, resetWeather } from './themes.js';
-import { drawTower } from './tower-sprite.js';
 import { generateText, generateBossPhrase } from './wordgen.js';
 import { bossForLevel, isBossLevel, updateBoss, damageBoss, bossVolleySize, drawBoss, BOSS_INTERVAL } from './boss.js';
 import {
-  AI_PROFILES, createRumble, createTower, tickVersus, playerAttack, damagePlayer,
-  damageTower, enemyTeamOf, teamOf, attackForCombo,
-  TOWER_MAX_HP, damageForWord, RUMBLE_MAX_HP, TOWER_ROUNDS,
+  AI_PROFILES, createRumble, tickVersus, playerAttack, damagePlayer,
+  attackForCombo, damageForWord, RUMBLE_MAX_HP,
 } from './versus.js';
 import { OnlineRoom, generateRoomCode, findOpenRoom } from './online.js';
 import {
@@ -31,6 +30,9 @@ import {
 } from './supabase.js';
 
 const MODE_FONT_SIZE = { words: 18, programming: 15, sentences: 13 };
+// Sidebar reserves this much of the right gutter during versus matches.
+const SIDEBAR_WIDTH = 150;
+
 const CHIP_COLORS = ['#00f6ff', '#ff2ec4', '#ffd83d', '#37ff8b', '#ff8a3d', '#7f5cff'];
 
 const LEADERBOARD_KEY = 'passageKeyLeaderboard';
@@ -137,6 +139,8 @@ const screens = {
   menu: $('screen-menu'),
   mode: $('screen-mode'),
   pause: $('screen-pause'),
+  roll: $('screen-roll'),
+  countdown: $('screen-countdown'),
   instructions: $('screen-instructions'),
   versus: $('screen-versus'),
   online: $('screen-online'),
@@ -150,14 +154,17 @@ const screens = {
   leaderboard: $('screen-leaderboard'),
 };
 
+// loadout roll + countdown DOM
+const rollReels = [0, 1, 2].map(i => $(`roll-reel-${i}`));
+const rollPassiveName = $('roll-passive-name');
+const rollContinue = $('roll-continue');
+const countdownLabel = $('countdown-label');
+const countdownNumber = $('countdown-number');
+
 // versus + online DOM
 const opponentRail = $('opponent-rail');
 const opponentCards = $('opponent-cards');
 const railToggle = $('rail-toggle');
-const towerHud = $('tower-hud');
-const towerFill = { A: $('tower-fill-A'), B: $('tower-fill-B') };
-const towerText = { A: $('tower-text-A'), B: $('tower-text-B') };
-const towerRoundEl = $('tower-round');
 const formatHint = $('format-hint');
 const difficultyHint = $('difficulty-hint');
 const onlineStatus = $('online-status');
@@ -235,10 +242,12 @@ let timeStopTimer = 0;
 let rapidTimer = 0;
 let poisoned = [];
 
+let snake = null;
 let boss = null;
 let lastBossLevel = 0;
 let bossesDefeated = 0;
 let pendingBossLevel = 0;
+let pendingSnake = false;
 
 // versus / online
 let vs = null;
@@ -247,16 +256,18 @@ let versusDifficulty = 'normal';
 let onlineFormat = 'rumble';
 let onlineRoom = null;
 let isOnlineMatch = false;
-let towerRoundActive = false;
 let nextWordId = 1;
 let playerPlacement = 0;
 let currentTheme = themeForLevel(1);
-let towerHitFlash = { A: 0, B: 0 };
 let pausedByMenu = false;
 let boardsMinimized = false;
 let instructionsReturn = 'menu';
 let fillWithBots = true;
 let searchCancelled = false;
+let pendingLoadout = null;
+let rollTimers = [];
+let countdownTimer = null;
+let countdownAborted = false;
 const QUALITY_LEVELS = ['LOW', 'MEDIUM', 'HIGH'];
 let quality = localStorage.getItem('passageKeyQuality') || 'HIGH';
 
@@ -266,7 +277,6 @@ let currentSession = null;
 let currentProfile = null;
 
 const isVersus = () => vs !== null;
-const isTower = () => vs && vs.format === 'tower';
 const isRumble = () => vs && vs.format === 'rumble';
 
 let spawnIntervalMs = 2000;
@@ -278,6 +288,14 @@ let totalKeystrokes = 0;
 let correctKeystrokes = 0;
 let wordsTypedTotal = 0;
 let gameStartTime = 0;
+
+// WPM inputs. Only characters from *completed* words count, and the clock only
+// advances while actually playing — so key-mashing, abandoning a half-typed
+// word, or sitting in a pause menu can't inflate the score. Using chars/5 as
+// the "word" unit keeps short and long words worth the same per character.
+let completedChars = 0;
+let typingMs = 0;
+let smoothedWpm = 0;
 
 let particles = [];
 let explosions = [];
@@ -406,6 +424,17 @@ function handleClearLeaderboard() {
 }
 
 // ---------- effects ----------
+
+
+// Standard WPM: (characters / 5) per minute of actual play.
+function currentWpm() {
+  const mins = Math.max(typingMs / 60000, 1 / 600);
+  return Math.round((completedChars / 5) / mins);
+}
+
+function currentAccuracy() {
+  return totalKeystrokes > 0 ? Math.round((correctKeystrokes / totalKeystrokes) * 100) : 100;
+}
 
 function comboMultiplier(c) {
   const base = 1 + Math.floor(c / 5) * 0.5;
@@ -687,11 +716,17 @@ function generateFitting(kind, difficulty) {
   return text;
 }
 
+// Right edge of the usable play field. In versus the sidebar occupies the
+// right gutter, so enemies must never spawn or drift underneath it.
+function playfieldRight() {
+  return canvas.width - (isVersus() ? SIDEBAR_WIDTH + 12 : 0);
+}
+
 function makeWord(text, opts = {}) {
   const margin = 50;
   ctx.font = pixelFont();
   const textWidth = ctx.measureText(text).width;
-  const maxRange = Math.max(0, canvas.width - margin * 2 - textWidth);
+  const maxRange = Math.max(0, playfieldRight() - margin * 2 - textWidth);
   const x = margin + Math.random() * maxRange;
   const color = opts.color || CHIP_COLORS[Math.floor(Math.random() * CHIP_COLORS.length)];
   const pattern = opts.pattern || pickPattern();
@@ -815,22 +850,25 @@ function resetGame() {
   freezeTimer = 0;
   scoreSurgeTimer = 0;
   shieldCharges = 0;
+  snake = null;
   boss = null;
   lastBossLevel = 0;
   pendingBossLevel = 0;
+  pendingSnake = false;
   bossesDefeated = 0;
-  towerRoundActive = false;
   spawnIntervalMs = 2000;
   baseSpeed = 50;
   lastSpawn = 0;
   totalKeystrokes = 0;
   correctKeystrokes = 0;
+  completedChars = 0;
+  typingMs = 0;
+  smoothedWpm = 0;
   wordsTypedTotal = 0;
   gameStartTime = performance.now();
   paused = false;
   pausedByMenu = false;
   boltPaths = [];
-  towerHitFlash = { A: 0, B: 0 };
   player.attackTimer = 0;
   player.hurtTimer = 0;
   hudScore.textContent = '0';
@@ -880,7 +918,6 @@ function leaveToMenu() {
   vitals.classList.add('hidden');
   bossBar.classList.add('hidden');
   opponentRail.classList.add('hidden');
-  towerHud.classList.add('hidden');
   vs = null;
   if (onlineRoom) { onlineRoom.leave().catch(() => {}); onlineRoom = null; }
   showScreen('menu');
@@ -897,9 +934,8 @@ function endGame() {
   sfxGameOver();
   bigShake();
 
-  const elapsedMinutes = Math.max((performance.now() - gameStartTime) / 60000, 1 / 60);
-  const accuracy = totalKeystrokes > 0 ? Math.round((correctKeystrokes / totalKeystrokes) * 100) : 100;
-  const wpm = Math.round((correctKeystrokes / 5) / elapsedMinutes);
+  const accuracy = currentAccuracy();
+  const wpm = currentWpm();
 
   resultTitle.textContent = gameplayMode === 'adventure' ? 'RUN OVER' : 'RESULT';
   resultScore.textContent = score;
@@ -990,6 +1026,8 @@ function onLevelUp() {
   // Adventure: a boss guards every Nth level. Queue it after the skill pick.
   if (gameplayMode === 'adventure' && isBossLevel(level) && level > lastBossLevel) {
     pendingBossLevel = level;
+  } else if (gameplayMode === 'adventure' && !snake && level % SNAKE_INTERVAL === 0) {
+    pendingSnake = true;
   }
   setTimeout(() => openSkillChoice(), 620);
 }
@@ -1005,6 +1043,7 @@ function registerKill(word, { silent = false } = {}) {
   const gained = Math.round(word.text.length * 10 * multiplier * scoreBoostMult * surgeMult);
   score += gained;
   wordsTypedTotal += 1;
+  completedChars += word.text.replace(/\s/g, '').length;
 
   if (passiveCounts.lifesteal > 0 && wordsTypedTotal % 10 === 0) {
     const healed = 3 * passiveCounts.lifesteal;
@@ -1041,19 +1080,7 @@ function registerKill(word, { silent = false } = {}) {
   }
 
   // Versus: clearing words is how you hurt the other side.
-  if (isTower()) {
-    // One damage per letter, amplified by combo and any active buffs.
-    const crit = (passiveCounts.crit || 0) > 0 && Math.random() < 0.15 * passiveCounts.crit;
-    const dmg = damageForWord(word.text, {
-      comboMult: multiplier,
-      buffMult: (doubleDamageTimer > 0 ? 2 : 1) * scoreBoostMult,
-      crit,
-    });
-    damageTower(vs, enemyTeamOf(vs.player.team), dmg);
-    updateTowerHud();
-    spawnFx(crit ? `CRIT -${dmg}` : `-${dmg}`, cx, word.y - 26, crit ? 'combo mega' : 'skill');
-    if (onlineRoom) onlineRoom.completeWord(word.id, vs.player.team);
-  } else if (isRumble()) {
+  if (isRumble()) {
     vs.player.combo = combo;
     const target = playerAttack(vs, combo);
     if (target) {
@@ -1103,8 +1130,6 @@ function onWordCompleted(word) {
 
 function activatePower() {
   if (state !== 'playing' || paused) return;
-  // Tower deliberately has no ultimate — skills only.
-  if (isTower()) { sfxPowerDenied(); return; }
   if (mana < MANA_MAX) { sfxPowerDenied(); return; }
   if (words.length === 0) return;
 
@@ -1129,10 +1154,6 @@ function activatePower() {
 function onWordMissed(word) {
   words.splice(words.indexOf(word), 1);
   if (activeWord === word) activeWord = null;
-
-  // Tower is a race, not a survival test: a dropped word is a lost opportunity
-  // rather than damage, since all damage is dealt to the enemy tower.
-  if (isTower()) return;
 
   if (shieldCharges > 0) {
     shieldCharges -= 1;
@@ -1235,12 +1256,9 @@ function chooseSkill(index) {
   paused = false;
   showScreen(null);
 
-  // Tower drafts a skill before each round, then the round begins.
-  if (isTower() && !towerRoundActive) {
-    towerRoundActive = true;
-    lastSpawn = performance.now();
-    showBanner('FIGHT!');
-    return;
+  if (pendingSnake) {
+    pendingSnake = false;
+    setTimeout(() => { if (state === 'playing') startSnake(); }, 250);
   }
 
   // A queued boss enters once the reward is chosen.
@@ -1473,11 +1491,7 @@ function escapeHtml(s) {
 }
 
 function liveStats() {
-  const mins = Math.max((performance.now() - gameStartTime) / 60000, 1 / 60);
-  return {
-    wpm: Math.round((correctKeystrokes / 5) / mins),
-    acc: totalKeystrokes > 0 ? Math.round((correctKeystrokes / totalKeystrokes) * 100) : 100,
-  };
+  return { wpm: smoothedWpm, acc: currentAccuracy() };
 }
 
 // Bots report the profile they're actually simulating, so the numbers are honest.
@@ -1487,9 +1501,7 @@ function botStats(op) {
 
 function renderOpponentRail() {
   if (!vs) return;
-  const list = isTower()
-    ? [...teamOf(vs, 'A'), ...teamOf(vs, 'B')]
-    : vs.opponents;
+  const list = vs.opponents;
 
   opponentCards.innerHTML = '';
   for (const op of list) {
@@ -1498,7 +1510,7 @@ function renderOpponentRail() {
     if (!op.alive) card.classList.add('dead');
     if (op.flash > 0) card.classList.add('clear');
 
-    const pct = isTower() ? 100 : Math.max(0, (op.hp / RUMBLE_MAX_HP) * 100);
+    const pct = Math.max(0, (op.hp / RUMBLE_MAX_HP) * 100);
     const teamCls = op.team ? (op.team === 'A' ? 'team-a' : 'team-b') : '';
 
     // A miniature of what that opponent is facing: bars stand in for words,
@@ -1534,7 +1546,7 @@ function renderOpponentRail() {
         <span class="opp-combo">${op.combo > 0 ? 'x' + op.combo : ''}</span>
       </div>
       <div class="opp-bar-outer">
-        <div class="opp-bar-fill ${teamCls}" style="width:${isTower() ? 100 : pct}%"></div>
+        <div class="opp-bar-fill ${teamCls}" style="width:${pct}%"></div>
       </div>
       <div class="opp-stats">
         <span>${stats.wpm} WPM</span><span>${stats.acc}%</span>
@@ -1554,45 +1566,6 @@ function toggleBoards() {
   renderOpponentRail();
 }
 
-function updateTowerHud() {
-  if (!isTower()) return;
-  for (const team of ['A', 'B']) {
-    const hp = vs.towers[team];
-    towerFill[team].style.width = `${(hp / TOWER_MAX_HP) * 100}%`;
-    towerText[team].textContent = `${hp} / ${TOWER_MAX_HP}`;
-  }
-  towerRoundEl.textContent = `ROUND ${vs.round}`;
-}
-
-// Tower bots pull from the same on-screen pool the player types from.
-const towerApi = {
-  claimWord(op) {
-    const free = words.filter(w => !w.claimedBy && w.y > 40);
-    if (free.length === 0) return null;
-    // prefer the lowest word — the most urgent one
-    free.sort((a, b) => b.y - a.y);
-    const word = free[Math.floor(Math.random() * Math.min(3, free.length))];
-    word.claimedBy = op;
-    return word;
-  },
-  isWordValid(word) {
-    return words.includes(word) && word.claimedBy && !word.claimedBy.isHuman;
-  },
-  releaseWord(word) {
-    if (words.includes(word)) word.claimedBy = null;
-  },
-  completeWord(word, op) {
-    const idx = words.indexOf(word);
-    if (idx === -1) return;
-    words.splice(idx, 1);
-    const cx = word.x + word.width / 2;
-    spawnExplosion(cx, word.y, op.team === 'A' ? '#7fe8ff' : '#ff8ad0');
-    spawnParticles(cx, word.y, 10, [op.team === 'A' ? '#7fe8ff' : '#ff8ad0', '#ffffff']);
-    damageTower(vs, enemyTeamOf(op.team), damageForWord(word.text, { comboMult: 1 + Math.floor(op.combo / 5) * 0.5 }));
-    updateTowerHud();
-  },
-};
-
 function startVersus(format, difficulty, online = false, roster = null) {
   gameplayMode = format;
   versusFormat = format;
@@ -1600,16 +1573,12 @@ function startVersus(format, difficulty, online = false, roster = null) {
   isOnlineMatch = online;
   playerPlacement = 0;
 
-  const capacity = format === 'tower' ? 8 : 6;
+  const capacity = 6;
   const humans = roster ? roster.filter(p => p.id !== onlineRoom?.selfId).length : 0;
   // Seats not taken by real players are filled by bots unless disabled.
-  const botCount = fillWithBots
-    ? Math.max(0, capacity - 1 - humans)
-    : Math.max(0, (format === 'tower' ? capacity - 1 - humans : 0));
+  const botCount = fillWithBots ? Math.max(0, capacity - 1 - humans) : 0;
 
-  vs = format === 'tower'
-    ? createTower({ difficulty, playerName: currentProfile?.username || 'You' })
-    : createRumble({ botCount, difficulty, playerName: currentProfile?.username || 'You' });
+  vs = createRumble({ botCount, difficulty, playerName: currentProfile?.username || 'You' });
 
   // Give the bots that stand in for real players their actual names, and stop
   // simulating them locally so network events drive them instead.
@@ -1627,28 +1596,16 @@ function startVersus(format, difficulty, online = false, roster = null) {
   startGame();
 
   opponentRail.classList.remove('hidden');
-  towerHud.classList.toggle('hidden', format !== 'tower');
-  if (format === 'tower') {
-    // Tower has no mana ultimate by design — the race is the pressure.
-    actionBar.querySelector('.mana-orb-wrap').classList.add('hidden');
-    vitals.classList.add('hidden');
-    updateTowerHud();
-    beginTowerRound();
-  } else {
-    actionBar.querySelector('.mana-orb-wrap').classList.remove('hidden');
-    health = RUMBLE_MAX_HP;
-    maxHealth = RUMBLE_MAX_HP;
-    updateHud();
-  }
+  // Restart is meaningless (and unfair) in a live PvP match.
+  hud.querySelector('[data-action="restart-run"]').classList.toggle('hidden', online);
+  actionBar.querySelector('.mana-orb-wrap').classList.remove('hidden');
+  health = RUMBLE_MAX_HP;
+  maxHealth = RUMBLE_MAX_HP;
+  updateHud();
   renderOpponentRail();
-}
 
-// Every tower round opens with a skill draft, per the format's rules.
-function beginTowerRound() {
-  towerRoundActive = false;
-  paused = true;
-  showBanner(`ROUND ${vs.round}`);
-  setTimeout(() => openSkillChoice(), 500);
+  // Versus never lets you pick: roll a kit, then count everyone in together.
+  rollLoadout(() => runCountdown(() => { lastSpawn = performance.now(); }));
 }
 
 function processVersusEvents(events) {
@@ -1679,20 +1636,6 @@ function processVersusEvents(events) {
           setTimeout(() => { if (vs) endVersus(null); }, 1400);
         }
         break;
-      case 'tower-damage':
-        towerHitFlash[ev.team] = 0.16;
-        break;
-      case 'round-end':
-        showBanner(`TEAM ${ev.winner} TAKES ROUND ${ev.round}`);
-        triggerScreenFlash();
-        bigShake();
-        break;
-      case 'round-start':
-        words = [];
-        activeWord = null;
-        updateTowerHud();
-        beginTowerRound();
-        break;
       case 'finished':
         endVersus(ev.winner);
         break;
@@ -1701,23 +1644,19 @@ function processVersusEvents(events) {
 }
 
 function endVersus(winner) {
-  const playerWon = isTower()
-    ? winner === 'A'
-    : (winner && winner.isHuman);
+  const playerWon = Boolean(winner && winner.isHuman);
 
   state = 'result';
   hud.classList.add('hidden');
   actionBar.classList.add('hidden');
   vitals.classList.add('hidden');
   opponentRail.classList.add('hidden');
-  towerHud.classList.add('hidden');
   stopMusic();
   playerWon ? sfxLevelUp() : sfxGameOver();
   bigShake();
 
-  const elapsedMinutes = Math.max((performance.now() - gameStartTime) / 60000, 1 / 60);
-  const accuracy = totalKeystrokes > 0 ? Math.round((correctKeystrokes / totalKeystrokes) * 100) : 100;
-  const wpm = Math.round((correctKeystrokes / 5) / elapsedMinutes);
+  const accuracy = currentAccuracy();
+  const wpm = currentWpm();
 
   if (playerWon) {
     resultTitle.textContent = 'VICTORY!';
@@ -1752,18 +1691,15 @@ function endVersus(winner) {
 function handleTypedChar(char) {
   if (state !== 'playing' || paused) return;
 
+  // The snake owns input while it's on screen.
+  if (typeAtSnake(char)) return;
+
   if (!activeWord) {
-    // In Tower the pool is shared, so a word another player has claimed is
-    // off-limits until they finish or fumble it.
     const candidates = words
-      .filter(w => w.text[0] === char && (!w.claimedBy || w.claimedBy.isHuman))
+      .filter(w => w.text[0] === char)
       .sort((a, b) => b.y - a.y);
     if (candidates.length === 0) return;
     activeWord = candidates[0];
-    if (isTower()) {
-      activeWord.claimedBy = vs.player;
-      if (onlineRoom) onlineRoom.claimWord(activeWord.id);
-    }
   }
 
   const expected = activeWord.text[activeWord.typed];
@@ -1779,13 +1715,6 @@ function handleTypedChar(char) {
     combo = passiveCounts.comboguard > 0 ? Math.floor(combo / 2) : 0;
     sfxKeyError();
     addShake(2, 0.1);
-    // Release the claim so a teammate can rescue the word.
-    if (isTower() && activeWord) {
-      activeWord.claimedBy = null;
-      activeWord.typed = 0;
-      if (onlineRoom) onlineRoom.releaseWord(activeWord.id);
-      activeWord = null;
-    }
     updateHud();
   }
 }
@@ -1846,15 +1775,12 @@ function render(now) {
   drawGrid(now);
 
   if (state === 'playing') {
-    // Tower mode plants a real fortress for each side behind the play field.
-    if (isTower()) {
-      // Kept clear of the opponent rail on the right so both towers stay visible.
-      const groundY = canvas.height * HORIZON_RATIO + 120;
-      drawTower(ctx, canvas.width * 0.12, groundY, vs.towers.A / TOWER_MAX_HP, 'A', now, towerHitFlash.A);
-      drawTower(ctx, canvas.width * 0.66, groundY, vs.towers.B / TOWER_MAX_HP, 'B', now, towerHitFlash.B);
-    }
-
     if (boss) drawBoss(ctx, boss, now);
+    if (snake) {
+      drawSnake(ctx, snake, now,
+        (size) => `${size}px "Press Start 2P", monospace`,
+        drawChip, drawText3D);
+    }
 
     const t = now / 1000;
     const fontSize = currentFontSize();
@@ -1968,7 +1894,6 @@ function tick(now) {
   updateParticles(dt);
   updateExplosions(dt);
   updateWeather(currentTheme, dt, canvas.width, canvas.height);
-  for (const k of ['A', 'B']) if (towerHitFlash[k] > 0) towerHitFlash[k] = Math.max(0, towerHitFlash[k] - dt);
   if (shakeTimer > 0) {
     shakeTimer = Math.max(0, shakeTimer - dt);
     if (shakeTimer === 0) shakeMag = 0;
@@ -1976,6 +1901,11 @@ function tick(now) {
 
   if (state === 'playing' && !paused) {
     updatePlayer(dt);
+
+    // Clock only runs during live play, and the displayed WPM eases toward the
+    // true value so the readout doesn't jitter every keystroke.
+    typingMs += dt * 1000;
+    smoothedWpm += (currentWpm() - smoothedWpm) * Math.min(1, dt * 3);
 
     const wasFrozen = freezeTimer > 0;
     const wasSlow = slowTimer > 0;
@@ -2035,7 +1965,7 @@ function tick(now) {
 
     // Versus: advance bots, then apply whatever they did to us.
     if (vs) {
-      const events = tickVersus(vs, dt, towerApi);
+      const events = tickVersus(vs, dt);
       if (events.length) processVersusEvents(events);
 
       railTimer -= dt;
@@ -2045,13 +1975,15 @@ function tick(now) {
       }
     }
 
+    if (snake) updateSnake(snake, dt, playfieldRight(), canvas.height);
+
     // Boss fights replace the normal spawner with scripted volleys.
     if (boss) {
       if (updateBoss(boss, dt, canvas.width, canvas.height)) spawnBossVolley();
     } else {
-      // Tower feeds eight typists from one pool, so it needs a denser stream.
-      const interval = isTower() ? 620 : spawnIntervalMs;
-      const cap = isTower() ? 14 : 999;
+      // Thin the horde while the snake is the main threat.
+      const interval = snake ? spawnIntervalMs * 2.2 : spawnIntervalMs;
+      const cap = snake ? 4 : 999;
       if (now - lastSpawn > interval && words.length < cap) {
         spawnWord();
         lastSpawn = now;
@@ -2060,7 +1992,7 @@ function tick(now) {
 
     for (const w of [...words]) {
       if (w.hitFlash > 0) w.hitFlash = Math.max(0, w.hitFlash - dt);
-      const minX = 10, maxX = canvas.width - 10 - w.width;
+      const minX = 10, maxX = playfieldRight() - 10 - w.width;
 
       if (w.pattern === 'sine') {
         w.y += w.speed * speedMult * dt;
@@ -2080,6 +2012,211 @@ function tick(now) {
 
   render(now);
   requestAnimationFrame(tick);
+}
+
+// ---------- snake mini-boss ----------
+
+function startSnake() {
+  const count = Math.min(4 + Math.floor(level / 2), 9);
+  const segWords = Array.from({ length: count }, () => generateFitting('normal', contentDifficulty()));
+  snake = createSnake({ level, words: segWords, canvasW: playfieldRight(), canvasH: canvas.height });
+  showBanner('THE WORDWYRM');
+  sfxMonsterRoar(0.8);
+  addShake(8, 0.5);
+  bigShake();
+  spawnShockwave(canvas.width / 2, canvas.height * 0.28, '#37ff8b', canvas.width);
+}
+
+// Typing routes to the snake first while it lives, since its segments sit
+// outside the normal falling-word list.
+function typeAtSnake(char) {
+  if (!snake || snake.defeated) return false;
+  const living = aliveSegments(snake);
+  if (!living.length) return false;
+
+  // Stay locked on a partially-typed segment before starting a new one.
+  let seg = living.find(s => s.typed > 0) || living.find(s => s.word[0] === char);
+  if (!seg) return false;
+
+  totalKeystrokes += 1;
+  if (seg.word[seg.typed] !== char) {
+    seg.typed = 0;
+    combo = passiveCounts.comboguard > 0 ? Math.floor(combo / 2) : 0;
+    sfxKeyError();
+    addShake(2, 0.1);
+    updateHud();
+    return true;
+  }
+
+  correctKeystrokes += 1;
+  seg.typed += 1;
+  seg.hitFlash = 0.1;
+  sfxKeyTick();
+
+  if (seg.typed >= seg.word.length) {
+    completedChars += seg.word.replace(/\s/g, '').length;
+    combo += 1;
+    maxCombo = Math.max(maxCombo, combo);
+    wordsTypedTotal += 1;
+    const gained = Math.round(seg.word.length * 14 * comboMultiplier(combo));
+    score += gained;
+
+    spawnExplosion(seg.x, seg.y, '#37ff8b');
+    spawnParticles(seg.x, seg.y, 20, ['#37ff8b', '#ffffff', '#9fffc0'], { speed: 220, life: 0.8 });
+    spawnFx(`+${gained}`, seg.x, seg.y - 20, 'score');
+    sfxMonsterDeath(1.2);
+    triggerAttack();
+    addShake(5, 0.25);
+
+    const done = severSegment(snake, seg);
+    grantXp(seg.word.length * 3);
+
+    if (done) {
+      const reward = 400 + level * 60;
+      score += reward;
+      showBanner('WORDWYRM SEVERED!');
+      spawnFx(`+${reward}`, canvas.width / 2, canvas.height * 0.32, 'combo mega');
+      triggerScreenFlash();
+      bigShake();
+      addShake(12, 0.6);
+      spawnShockwave(snake.headX, snake.headY, '#37ff8b', canvas.width);
+      spawnParticles(snake.headX, snake.headY, 70, ['#37ff8b', '#ffffff'],
+        { speed: 300, life: 1.4, gravity: 120 });
+      grantXp(90 * Math.max(1, Math.floor(level / 2)));
+      setTimeout(() => { snake = null; }, 1400);
+    }
+    updateHud();
+  }
+  return true;
+}
+
+// ---------- loadout roll ----------
+
+// Versus modes don't let you draft; the arena rolls a kit so every match
+// starts from a different footing.
+function rollLoadout(onDone) {
+  const actives = shuffledCopy(ACTIVE_SKILLS).slice(0, 3);
+  const passive = shuffledCopy(PASSIVE_SKILLS)[0];
+  // Long-cooldown skills are the rare pulls worth celebrating.
+  const isRare = (s) => s.cooldown >= 26;
+
+  // Hold the match until the kit is locked and the countdown ends, otherwise
+  // enemies keep falling behind the roll screen and can kill you mid-animation.
+  paused = true;
+  rollContinue.classList.add('hidden');
+  rollPassiveName.textContent = '—';
+  rollReels.forEach(r => {
+    r.classList.add('spinning');
+    r.classList.remove('locked', 'rare');
+  });
+  showScreen('roll');
+
+  const cycler = setInterval(() => {
+    for (const r of rollReels) {
+      if (r.classList.contains('locked')) continue;
+      const s = ACTIVE_SKILLS[Math.floor(Math.random() * ACTIVE_SKILLS.length)];
+      r.querySelector('.roll-icon').textContent = s.icon;
+      r.querySelector('.roll-name').textContent = s.name;
+    }
+    tone({ freq: 900 + Math.random() * 500, duration: 0.02, type: 'square', volume: 0.03 });
+  }, 70);
+
+  const lockReel = (i) => {
+    const r = rollReels[i];
+    const s = actives[i];
+    r.classList.remove('spinning');
+    r.classList.add('locked');
+    r.querySelector('.roll-icon').textContent = s.icon;
+    r.querySelector('.roll-name').textContent = s.name;
+    if (isRare(s)) {
+      r.classList.add('rare');
+      sfxCombo(true);
+      triggerScreenFlash();
+      bigShake();
+    } else {
+      sfxPowerReady();
+    }
+    addShake(5, 0.25);
+  };
+
+  rollTimers.push(setTimeout(() => lockReel(0), 900));
+  rollTimers.push(setTimeout(() => lockReel(1), 1500));
+  rollTimers.push(setTimeout(() => {
+    lockReel(2);
+    clearInterval(cycler);
+    rollPassiveName.textContent = `${passive.icon}  ${passive.name} — ${passive.desc}`;
+    sfxLevelUp();
+    rollContinue.classList.remove('hidden');
+  }, 2100));
+
+  pendingLoadout = { actives, passive, onDone };
+}
+
+function applyRolledLoadout() {
+  if (!pendingLoadout) return;
+  const { actives, passive, onDone } = pendingLoadout;
+  pendingLoadout = null;
+  rollTimers.forEach(clearTimeout);
+  rollTimers = [];
+
+  activeSkills = actives.map(d => ({
+    id: d.id, name: d.name, icon: d.icon, cooldownMax: d.cooldown, cooldownLeft: 0,
+  }));
+  ownedActiveIds = new Set(actives.map(d => d.id));
+  passiveCounts[passive.id] = (passiveCounts[passive.id] || 0) + 1;
+  if (passive.id === 'ironskin') { maxHealth += 20; health = Math.min(maxHealth, health + 20); }
+
+  updateSkillBarUI();
+  updateHud();
+  showScreen(null);
+  // Stay paused — the countdown owns resuming play.
+  if (onDone) onDone();
+  else paused = false;
+}
+
+// ---------- match countdown ----------
+
+function runCountdown(onGo) {
+  paused = true;
+  countdownAborted = false;
+  countdownLabel.textContent = 'MATCH STARTING';
+  showScreen('countdown');
+
+  let n = 5;
+  const step = () => {
+    if (countdownAborted) return;
+
+    if (n > 0) {
+      countdownNumber.textContent = n;
+      countdownNumber.className = 'countdown-number';
+      void countdownNumber.offsetWidth;
+      countdownNumber.classList.add('tick');
+      tone({ freq: 620, duration: 0.12, type: 'square', volume: 0.09 });
+      n -= 1;
+      countdownTimer = setTimeout(step, 900);
+    } else {
+      countdownNumber.textContent = 'GO!';
+      countdownNumber.className = 'countdown-number';
+      void countdownNumber.offsetWidth;
+      countdownNumber.classList.add('go');
+      countdownLabel.textContent = '';
+      sfxLevelUp();
+      bigShake();
+      addShake(9, 0.4);
+      countdownTimer = setTimeout(() => {
+        showScreen(null);
+        paused = false;
+        if (onGo) onGo();
+      }, 850);
+    }
+  };
+  step();
+}
+
+// If a player drops mid-countdown the match can't start, so unwind it.
+function abortCountdown() {
+  countdownAborted = true;
+  if (countdownTimer) { clearTimeout(countdownTimer); countdownTimer = null; }
 }
 
 // ---------- pause ----------
@@ -2111,9 +2248,7 @@ function selectChip(el) {
 }
 
 function updateVersusHints() {
-  formatHint.textContent = versusFormat === 'tower'
-    ? '4v4. Shared word pool — each word deals 5 damage to the enemy tower.'
-    : 'Up to 6 fighters. Last one standing wins.';
+  formatHint.textContent = 'Up to 6 fighters. Last one standing wins.';
   const p = AI_PROFILES[versusDifficulty];
   difficultyHint.textContent = `${p.label} — ${p.wpm} WPM, ${Math.round(p.accuracy * 100)}% accuracy.`;
 }
@@ -2213,7 +2348,7 @@ function renderLobby() {
       <span class="lobby-badge">${p.host ? 'HOST' : ''}</span>`;
     lobbyPlayers.appendChild(li);
   }
-  const min = onlineFormat === 'tower' ? 2 : 2;
+  const min = 2;
   lobbyHint.textContent = players.length < min
     ? 'waiting for players...'
     : `${players.length} in room — host can start`;
@@ -2251,7 +2386,6 @@ function handleOnlineEvent(ev) {
         words.splice(idx, 1);
         spawnExplosion(w.x + w.width / 2, w.y, '#ff8ad0');
       }
-      if (vs && ev.team) { damageTower(vs, enemyTeamOf(ev.team), ev.damage || 1); updateTowerHud(); }
       break;
     }
     case 'finished':
@@ -2405,6 +2539,7 @@ document.addEventListener('click', (e) => {
       fillWithBots = target.dataset.fill === '1';
       selectChip(target);
       break;
+    case 'roll-continue': applyRolledLoadout(); break;
     case 'quickplay': quickplay(); break;
     case 'cancel-search': cancelSearch(); break;
     case 'cycle-quality': cycleQuality(); break;
@@ -2413,7 +2548,13 @@ document.addEventListener('click', (e) => {
     // Versus matches must rebuild their opponents, not just reset the board.
     case 'play-again':
     case 'restart-run':
-      if (gameplayMode === 'rumble' || gameplayMode === 'tower') {
+      // You can't rewind a live match against real people.
+      if (isOnlineMatch && vs && !vs.finished) {
+        spawnFx('NO RESTARTS IN PVP', canvas.width / 2, canvas.height * 0.3, 'combo');
+        sfxPowerDenied();
+        break;
+      }
+      if (gameplayMode === 'rumble') {
         startVersus(gameplayMode, versusDifficulty, false);
       } else {
         startGame();
@@ -2526,6 +2667,17 @@ window.PK = {
   spawnBossVolley,
   startVersus,
   runSkill: runActiveSkillEffect,
+  get snake() { return snake; },
+  startSnake,
+  typeAtSnake,
+  rollLoadout,
+  runCountdown,
+  get wpmNow() { return currentWpm(); },
+  get accNow() { return currentAccuracy(); },
+  get completedChars() { return completedChars; },
+  get typingMs() { return typingMs; },
+  addTypingTime(ms) { typingMs += ms; },
+  playfieldRight,
   get themeName() { return currentTheme.name; },
   setLevelTheme(lvl) { level = lvl; applyTheme(lvl); },
   get poisonedCount() { return poisoned.length; },
@@ -2535,7 +2687,6 @@ window.PK = {
   registerKill,
   makeWord,
   generateFitting,
-  towerApi,
   xpNeededFor,
   BOSS_INTERVAL,
 };

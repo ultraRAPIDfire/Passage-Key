@@ -599,20 +599,22 @@ html, body {
 
 #opponent-rail {
   position: absolute;
-  right: 16px;
+  right: 8px;
   top: 68px;
   z-index: 5;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: 168px;
+  gap: 4px;
+  width: 142px;
 }
 
 .opp-card {
-  padding: 7px 9px;
-  background: linear-gradient(180deg, var(--px-panel-2), var(--px-panel));
-  border: 2px solid var(--px-ink);
-  box-shadow: 0 3px 0 var(--px-ink), 0 6px 10px rgba(0,0,0,0.45);
+  padding: 5px 7px;
+  /* Translucent so the play field stays readable behind the rail. */
+  background: linear-gradient(180deg, rgba(42,22,96,0.82), rgba(26,13,61,0.82));
+  backdrop-filter: blur(2px);
+  border: 1px solid rgba(91,57,168,0.9);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
   transition: transform 0.1s ease, opacity 0.3s ease;
 }
 
@@ -927,6 +929,135 @@ html, body {
   line-height: 1.6;
   color: var(--px-red);
   min-height: 12px;
+}
+
+/* ---------- loadout roll (slot machine) ---------- */
+
+.roll-row { display: flex; gap: 18px; }
+
+.roll-reel {
+  width: 148px;
+  height: 168px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #241150, #0d0524);
+  border: 3px solid var(--px-ink);
+  box-shadow:
+    inset 0 0 24px rgba(0,0,0,0.7),
+    0 7px 0 var(--px-ink),
+    0 12px 20px rgba(0,0,0,0.6);
+}
+
+.roll-reel .roll-icon {
+  font-size: 44px;
+  line-height: 1;
+  text-shadow: 0 0 18px currentColor;
+}
+
+.roll-reel .roll-name {
+  font-size: 9px;
+  color: #c7c2ff;
+  letter-spacing: 1px;
+  text-align: center;
+  padding: 0 6px;
+}
+
+/* fast blur while the reel is spinning */
+.roll-reel.spinning .roll-icon { animation: reelSpin 90ms linear infinite; }
+
+@keyframes reelSpin {
+  0%   { transform: translateY(-16px) scale(0.9); opacity: 0.25; }
+  50%  { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(16px) scale(0.9); opacity: 0.25; }
+}
+
+.roll-reel.locked {
+  border-color: var(--px-gold);
+  animation: reelLock 460ms cubic-bezier(.2,1.5,.4,1);
+}
+
+.roll-reel.locked .roll-name { color: var(--px-gold); }
+
+@keyframes reelLock {
+  0%   { transform: scale(1.22); box-shadow: 0 0 40px var(--px-gold), 0 7px 0 var(--px-ink); }
+  60%  { transform: scale(0.97); }
+  100% { transform: scale(1); box-shadow: 0 0 16px rgba(255,216,61,0.5), 0 7px 0 var(--px-ink); }
+}
+
+/* rare pulls get a louder celebration */
+.roll-reel.rare {
+  border-color: var(--px-magenta);
+  animation: reelRare 900ms ease-out;
+}
+
+.roll-reel.rare .roll-name { color: var(--px-magenta); }
+
+@keyframes reelRare {
+  0%, 100% { box-shadow: 0 0 20px var(--px-magenta), 0 7px 0 var(--px-ink); }
+  25% { box-shadow: 0 0 60px var(--px-magenta), 0 0 100px var(--px-magenta), 0 7px 0 var(--px-ink); transform: scale(1.12) rotate(-2deg); }
+  60% { box-shadow: 0 0 40px var(--px-magenta), 0 7px 0 var(--px-ink); transform: scale(1.04) rotate(1deg); }
+}
+
+.roll-passive {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, #2a1660, #170a35);
+  border: 3px solid var(--px-ink);
+  box-shadow: 0 5px 0 var(--px-ink);
+}
+
+.roll-passive-label { font-size: 8px; color: var(--px-cyan); letter-spacing: 2px; }
+.roll-passive-name { font-size: 11px; color: var(--px-green); letter-spacing: 1px; }
+
+/* ---------- match countdown ---------- */
+
+.countdown-screen { background: rgba(7, 2, 26, 0.55); gap: 8px; }
+
+.countdown-label {
+  font-size: 14px;
+  letter-spacing: 4px;
+  color: var(--px-cyan);
+  text-shadow: 2px 2px 0 #036673, 0 0 20px rgba(0,246,255,0.8);
+}
+
+.countdown-number {
+  font-size: 120px;
+  line-height: 1;
+  color: #fff6d8;
+  text-shadow:
+    2px 2px 0 #ffbb3d, 4px 4px 0 #e08b1d, 6px 6px 0 #a85c12,
+    8px 8px 0 #5c2f08, 0 0 50px rgba(255,187,61,0.9);
+}
+
+.countdown-number.tick { animation: countTick 900ms cubic-bezier(.2,1.4,.4,1); }
+
+@keyframes countTick {
+  0%   { transform: scale(2.2) rotate(-8deg); opacity: 0; }
+  25%  { transform: scale(1) rotate(0deg); opacity: 1; }
+  80%  { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.7); opacity: 0; }
+}
+
+.countdown-number.go {
+  color: #d8ffe8;
+  font-size: 150px;
+  text-shadow:
+    2px 2px 0 #37ff8b, 4px 4px 0 #0f8f47, 6px 6px 0 #064d26,
+    0 0 70px rgba(55,255,139,1);
+  animation: countGo 1s cubic-bezier(.2,1.6,.4,1);
+}
+
+@keyframes countGo {
+  0%   { transform: scale(0.2) rotate(-14deg); opacity: 0; }
+  30%  { transform: scale(1.5) rotate(4deg); opacity: 1; }
+  55%  { transform: scale(1.1) rotate(0deg); }
+  100% { transform: scale(3) ; opacity: 0; }
 }
 
 /* ---------- matchmaking spinner ---------- */
